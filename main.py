@@ -13,6 +13,7 @@ from bot import (start, menu_command, gen_command, button_handler,
 
 telegram_app = None
 API_KEY = os.getenv("API_KEY", "")  # Optional: authenticate cookie pushes
+SESSION_CHECK_INTERVAL = int(os.getenv("SESSION_CHECK_INTERVAL", "30"))  # minutes
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -31,11 +32,37 @@ async def lifespan(app: FastAPI):
     await telegram_app.start()
     await telegram_app.updater.start_polling()
 
+    # Auto session check every N minutes
+    session_task = asyncio.create_task(session_check_loop())
+
     yield
 
+    session_task.cancel()
     await telegram_app.updater.stop()
     await telegram_app.stop()
     await telegram_app.shutdown()
+
+async def session_check_loop():
+    """Check all account sessions every SESSION_CHECK_INTERVAL minutes."""
+    while True:
+        try:
+            await asyncio.sleep(SESSION_CHECK_INTERVAL * 60)
+            from worker import check_session
+            expired = await check_session()
+            if expired and telegram_app:
+                for acct in expired:
+                    label = acct.get("label", "Unknown")
+                    msg = f"⚠️ Session expired: `{label}`\nRe-capture cookies from extension."
+                    for uid in config.ADMIN_IDS:
+                        try:
+                            await telegram_app.bot.send_message(chat_id=uid, text=msg, parse_mode="Markdown")
+                        except:
+                            pass
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"[session_check] Error: {e}")
+            await asyncio.sleep(60)
 
 app = FastAPI(lifespan=lifespan, title="GPT Image Bot", docs_url=None, redoc_url=None)
 

@@ -1,137 +1,134 @@
-"""
-Worker: Playwright headless ChatGPT automation
-
-Login flow (v2 — extension auto-sends cookies to MongoDB):
-1. Chrome extension captures cookies from chatgpt.com
-2. Extension POSTs cookies to FastAPI endpoint (POST /api/cookies)
-3. Saved in MongoDB accounts collection
-4. Worker reads account from DB → injects cookies → validates session
-5. Each prompt opens in a FRESH new chat (navigate to / or click New Chat)
-6. If session expired → marks expired → admin notified
-
-Token refresh: WE DON'T REFRESH. We DETECT expiry and alert admin.
-Admin re-captures cookies from extension (which auto-sends to DB).
-"""
-
-import asyncio, re, traceback
-from datetime import datetime, timezone
+import asyncio, traceback
 from playwright.async_api import async_playwright, TimeoutError as PwTimeout
 
 import config
-from models import Account, Queue
+from models import Account
 from accounts.manager import get_next_account, mark_success, mark_error, mark_expired
 
 CHATGPT_URL = "https://chatgpt.com"
+IMAGES_URL = "https://chatgpt.com/images"
 LOGIN_URL = "https://chatgpt.com/auth/login"
 
-browser = None
-cached_context = None
-cached_page = None
+UPGRADE_PATTERNS = [
+    "upgrade", "subscription", "limit reached", "too many",
+    "rate limit", "try again later", "429", "please upgrade",
+    "you've reached the limit", "billing",
+]
+
+_browser = None
 
 async def get_browser():
-    global browser
-    if browser is None:
+    global _browser
+    if _browser is None:
         p = await async_playwright().start()
-        browser = await p.chromium.launch(
+        _browser = await p.chromium.launch(
             headless=True,
             args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--single-process",
-                "--disable-accelerated-2d-canvas",
-                "--no-first-run",
-                "--disable-web-security",
+                "--no-sandbox", "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage", "--disable-gpu",
+                "--single-process", "--disable-accelerated-2d-canvas",
+                "--no-first-run", "--disable-web-security",
             ]
         )
-    return browser
+    return _browser
+
+async def close():
+    global _browser
+    if _browser:
+        await _browser.close()
+        _browser = None
 
 async def new_context(cookies):
     b = await get_browser()
     ctx = await b.new_context(
         viewport={"width": 1280, "height": 800},
-        user_agent=(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-        locale="en-US",
-        timezone_id="America/New_York"
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        locale="en-US", timezone_id="America/New_York"
     )
     if cookies:
         await ctx.add_cookies(cookies)
     return ctx
 
-async def login(account):
-    """Load account cookies, return page. Returns None if expired."""
-    global cached_context, cached_page
-    if cached_context:
-        await cached_context.close()
-    cached_context = await new_context(account["cookies"])
-    cached_page = await cached_context.new_page()
+async def login(account, cb=None):
+    ctx = await new_context(account["cookies"])
+    p = await ctx.new_page()
 
     try:
-        await cached_page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30000)
+        await p.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30000)
     except PwTimeout:
-        return None
+        await ctx.close()
+        return None, None
 
     await asyncio.sleep(3)
-    if LOGIN_URL in cached_page.url:
+    if LOGIN_URL in p.url:
         mark_expired(account["_id"])
+        await ctx.close()
+        return None, None
+
+    if cb:
+        await cb("📍 Opening Images page...")
+    try:
+        await p.goto(IMAGES_URL, wait_until="domcontentloaded", timeout=20000)
+    except:
+        pass
+    await asyncio.sleep(5)
+
+    return p, ctx
+
+PROMPT_SELECTORS = [
+    '#prompt-textarea',
+    'textarea[placeholder*="Describe"]',
+    'textarea[placeholder*="image"]',
+    'textarea[placeholder*="create"]',
+    '[contenteditable="true"]',
+    'div[contenteditable="true"]',
+    'textarea',
+]
+
+SUBMIT_SELECTORS = [
+    '[data-testid="send-button"]',
+    'button[type="submit"]',
+    'button:has(svg)',
+    'button[aria-label*="Send"]',
+]
+
+IMAGE_SELECTORS = [
+    'img[src*="dalle"]',
+    'img[src*="oaidalle"]',
+    'img[src*="gpt-image"]',
+    'img[alt*="DALL"]',
+    'img[alt*="Generated"]',
+]
+
+STOP_SELECTORS = [
+    '[data-testid="stop-button"]',
+    'button:has(svg.lucide-square)',
+    'button[aria-label="Stop"]',
+    'button:has-text("Stop")',
+]
+
+async def find_visible(page, selectors, timeout=10000):
+    for sel in selectors:
+        try:
+            el = await page.wait_for_selector(sel, timeout=3000)
+            if el and await el.is_visible():
+                return el
+        except:
+            continue
+    try:
+        el = await page.wait_for_selector(selectors[0], timeout=timeout)
+        return el
+    except:
         return None
 
-    # Fresh new chat per account
-    try:
-        new_chat_btn = await cached_page.query_selector(
-            'a[href="/"], nav a:has(svg), button:has-text("New Chat"), [data-testid="new-chat-button"]'
-        )
-        if new_chat_btn:
-            await new_chat_btn.click()
-            await asyncio.sleep(2)
-        else:
-            await cached_page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=15000)
-            await asyncio.sleep(2)
-    except Exception:
-        await cached_page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=15000)
-        await asyncio.sleep(2)
+def is_upgrade(body):
+    b = body.lower()
+    for pat in UPGRADE_PATTERNS:
+        if pat in b:
+            return True
+    return False
 
-    return cached_page
-
-async def step_log(page, step_msg, progress_msg):
-    """Log a step and update the progress message if provided."""
-    print(f"[worker] {step_msg}")
-    return step_msg
-
-async def wait_for_image(p, timeout=120000):
-    deadline = asyncio.get_event_loop().time() + (timeout / 1000)
-    while asyncio.get_event_loop().time() < deadline:
-        try:
-            img = await p.wait_for_selector(
-                'img[src*="dalle"], img[src*="oaidalle"], img[src*="gpt-image"]',
-                timeout=15000
-            )
-            if img:
-                return await img.get_attribute("src")
-        except PwTimeout:
-            pass
-        stop_btn = await p.query_selector(
-            'button[data-testid="stop-button"], button:has(svg.lucide-square)'
-        )
-        if not stop_btn:
-            break
-        await asyncio.sleep(2)
-    return None
-
-async def submit_prompt(prompt, image_size="1:1", retry=2, progress_callback=None):
-    """
-    Main generation function.
-    Opens fresh chat per account → fills prompt → sends → waits for image.
-    progress_callback(msg: str) called at each step for live UI updates.
-    """
-    if progress_callback:
-        await progress_callback("🔍 Finding available account...")
-
+async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=None):
     for attempt in range(retry):
         account = get_next_account()
         if not account:
@@ -140,36 +137,48 @@ async def submit_prompt(prompt, image_size="1:1", retry=2, progress_callback=Non
             return {"success": False, "error": "No valid accounts"}
 
         if progress_callback:
-            await progress_callback(f"🔄 Opening browser for `{account.get('label', 'Account')}`...")
+            await progress_callback(f"🔄 Attempt {attempt+1} — `{account.get('label', 'Account')}`")
 
-        p = await login(account)
+        p, ctx = await login(account, cb=progress_callback)
         if p is None:
             mark_error(account["_id"])
             if progress_callback:
-                await progress_callback(f"⚠️ Session expired, trying next account...")
+                await progress_callback("⚠️ Session expired, trying next...")
             continue
 
         if progress_callback:
             await progress_callback(f"✅ Logged in as `{account.get('label', 'Account')}`")
 
-        if progress_callback:
-            await progress_callback(f"✍️ Typing prompt...")
+        for dismiss_sel in [
+            'button:has-text("Stay logged out")',
+            'button:has-text("Continue")',
+            '[aria-label="Close"]', '.btn-close',
+            'button:has-text("Dismiss")',
+            'button:has-text("Got it")',
+        ]:
+            try:
+                btn = await p.query_selector(dismiss_sel)
+                if btn and await btn.is_visible():
+                    await btn.click()
+                    await asyncio.sleep(1)
+            except:
+                pass
 
         try:
-            ta = await p.wait_for_selector(
-                '#prompt-textarea, textarea[placeholder*="Message"], [contenteditable="true"]',
-                timeout=20000
-            )
+            ta = await find_visible(p, PROMPT_SELECTORS, timeout=25000)
+            if not ta:
+                await p.screenshot(path="/tmp/worker-no-prompt.png")
+                if progress_callback:
+                    await progress_callback("⚠️ Prompt field not found, screenshot saved")
+
             await ta.click()
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.5)
             await ta.fill("")
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.5)
             await p.keyboard.type(prompt, delay=15)
             await asyncio.sleep(1)
 
-            send_btn = await p.query_selector(
-                '[data-testid="send-button"], button:has(svg.lucide-arrow-up)'
-            )
+            send_btn = await find_visible(p, SUBMIT_SELECTORS, timeout=5000)
             if send_btn:
                 await send_btn.click()
             else:
@@ -184,57 +193,77 @@ async def submit_prompt(prompt, image_size="1:1", retry=2, progress_callback=Non
 
             if image_url:
                 mark_success(account["_id"])
+                await ctx.close()
                 if progress_callback:
-                    await progress_callback(f"✅ Image generated on `{account.get('label', 'Account')}`")
+                    await progress_callback(f"✅ Done on `{account.get('label', 'Account')}`")
                 return {"success": True, "image_url": image_url, "account": account.get("label")}
 
             body = await p.text_content("body") or ""
-            if "rate" in body.lower() or "too many" in body.lower() or "429" in body:
-                mark_error(account["_id"])
-                if progress_callback:
-                    await progress_callback(f"⚠️ Rate limited, rotating account...")
-                if attempt < retry - 1:
-                    await asyncio.sleep(5)
-                    continue
-                return {"success": False, "error": "Rate limited on all accounts"}
 
+            if is_upgrade(body):
+                mark_error(account["_id"])
+                await ctx.close()
+                if progress_callback:
+                    await progress_callback("⬆️ Upgrade limit hit, rotating account...")
+                continue
+
+            await p.screenshot(path="/tmp/worker-no-image.png")
+            await ctx.close()
             if progress_callback:
-                await progress_callback(f"❌ No image generated")
+                await progress_callback("❌ No image generated")
             return {"success": False, "error": "No image generated"}
 
         except Exception as e:
             mark_error(account["_id"])
-            tb = traceback.format_exc()
+            try:
+                await p.screenshot(path=f"/tmp/worker-error-{attempt}.png")
+            except:
+                pass
+            try:
+                await ctx.close()
+            except:
+                pass
             if progress_callback:
-                await progress_callback(f"⚠️ Error: {str(e)[:60]}... retrying")
-            if attempt < retry - 1:
-                await asyncio.sleep(3)
-                continue
-            return {"success": False, "error": str(e)[:200]}
+                await progress_callback(f"⚠️ {str(e)[:60]}... rotating")
+            continue
 
-    return {"success": False, "error": "All attempts exhausted"}
+    return {"success": False, "error": "All accounts exhausted"}
+
+async def wait_for_image(p, timeout=180000):
+    deadline = asyncio.get_event_loop().time() + (timeout / 1000)
+    while asyncio.get_event_loop().time() < deadline:
+        img = await find_visible(p, IMAGE_SELECTORS, timeout=15000)
+        if img:
+            return await img.get_attribute("src")
+        body = await p.text_content("body") or ""
+        if is_upgrade(body):
+            return None
+        stop_btn = await find_visible(p, STOP_SELECTORS, timeout=3000)
+        if not stop_btn:
+            break
+        await asyncio.sleep(2)
+    return None
 
 async def check_session():
-    """Validate all account sessions."""
     docs = Account.get_all()
     expired = []
     for d in docs:
         if d.get("expired"):
             expired.append(d)
             continue
-        p = await login(d)
-        if p is None:
-            mark_expired(d["_id"])
-            expired.append(d)
-        if cached_context:
-            await cached_context.close()
-        if cached_page:
-            await cached_page.close()
+        try:
+            b = await get_browser()
+            ctx = await new_context(d["cookies"])
+            p = await ctx.new_page()
+            await p.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=20000)
+            await asyncio.sleep(3)
+            if LOGIN_URL in p.url:
+                mark_expired(d["_id"])
+                expired.append(d)
+            await ctx.close()
+        except Exception:
+            try:
+                await ctx.close()
+            except:
+                pass
     return expired
-
-async def close():
-    global browser, cached_context, cached_page
-    if cached_context:
-        await cached_context.close()
-    if browser:
-        await browser.close()
