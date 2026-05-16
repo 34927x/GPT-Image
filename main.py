@@ -27,13 +27,15 @@ async def lifespan(app: FastAPI):
     telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     telegram_app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
 
-    asyncio.create_task(telegram_app.start())
-    asyncio.create_task(telegram_app.updater.start_polling())
+    await telegram_app.initialize()
+    await telegram_app.start()
+    await telegram_app.updater.start_polling()
 
     yield
 
     await telegram_app.updater.stop()
     await telegram_app.stop()
+    await telegram_app.shutdown()
 
 app = FastAPI(lifespan=lifespan, title="GPT Image Bot", docs_url=None, redoc_url=None)
 

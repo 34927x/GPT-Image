@@ -5,9 +5,7 @@ import config
 _client = MongoClient(
     config.MONGO_URI,
     serverSelectionTimeoutMS=5000,
-    tls=True,
-    tlsAllowInvalidCertificates=True,
-    tlsAllowInvalidHostnames=True
+    tlsInsecure=True
 )
 
 db = _client[config.MONGO_DB]
