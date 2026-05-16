@@ -140,7 +140,7 @@ async def submit_prompt(prompt, image_size="1:1", retry=2, progress_callback=Non
             return {"success": False, "error": "No valid accounts"}
 
         if progress_callback:
-            await progress_callback(f"🔄 Logged in as `{account.get('label', 'Account')}`")
+            await progress_callback(f"🔄 Opening browser for `{account.get('label', 'Account')}`...")
 
         p = await login(account)
         if p is None:
@@ -150,14 +150,21 @@ async def submit_prompt(prompt, image_size="1:1", retry=2, progress_callback=Non
             continue
 
         if progress_callback:
-            await progress_callback(f"✍️ Sending prompt...")
+            await progress_callback(f"✅ Logged in as `{account.get('label', 'Account')}`")
+
+        if progress_callback:
+            await progress_callback(f"✍️ Typing prompt...")
 
         try:
-            ta = await p.wait_for_selector("#prompt-textarea", timeout=10000)
+            ta = await p.wait_for_selector(
+                '#prompt-textarea, textarea[placeholder*="Message"], [contenteditable="true"]',
+                timeout=20000
+            )
             await ta.click()
-            await ta.select_text()
-            await asyncio.sleep(0.5)
-            await p.keyboard.type(prompt, delay=20)
+            await asyncio.sleep(0.3)
+            await ta.fill("")
+            await asyncio.sleep(0.3)
+            await p.keyboard.type(prompt, delay=15)
             await asyncio.sleep(1)
 
             send_btn = await p.query_selector(
