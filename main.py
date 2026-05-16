@@ -42,6 +42,11 @@ async def lifespan(app: FastAPI):
     session_task = asyncio.create_task(session_check_loop())
     limit_task = asyncio.create_task(limit_reset_loop())
 
+    # Process any pending queue items from before restart
+    if queue_count > 0:
+        print(f"[main] Processing {queue_count} pending queue items...")
+        asyncio.create_task(process_queue())
+
     try:
         text = (
             "━━━━━━━━━━━━━━━━━━━\n"
