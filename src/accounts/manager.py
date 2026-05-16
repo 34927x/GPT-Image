@@ -82,6 +82,8 @@ def get_session_status():
     for i, d in enumerate(docs):
         label = d.get("label", f"#{i+1}")
         last = d.get("last_used") or d.get("created_at")
+        if last and last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
         expired = d.get("expired", False)
         errs = d.get("error_count", 0)
         hours_since = (now - last).total_seconds() / 3600 if last else 0
