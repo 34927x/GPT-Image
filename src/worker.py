@@ -18,9 +18,8 @@ from datetime import datetime, timezone
 from playwright.async_api import async_playwright, TimeoutError as PwTimeout
 
 import config
-from models import Account, Queue, Session
+from models import Account, Queue
 from accounts.manager import get_next_account, mark_success, mark_error, mark_expired
-from utils.helpers import make_image_filename
 
 CHATGPT_URL = "https://chatgpt.com"
 LOGIN_URL = "https://chatgpt.com/auth/login"
