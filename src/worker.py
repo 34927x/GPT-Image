@@ -2,7 +2,6 @@ import asyncio, traceback
 from datetime import datetime, timezone
 from playwright.async_api import async_playwright, TimeoutError as PwTimeout
 
-import config
 from models import Account
 from accounts.manager import (
     get_next_account, mark_success, mark_error, mark_expired,
@@ -76,11 +75,84 @@ async def capture_profile_name(p):
         return m.group(1)
     return None
 
+async def wait_stable(page, timeout_sec=8):
+    try:
+        await page.wait_for_load_state("networkidle", timeout=timeout_sec*1000)
+    except:
+        pass
+    await asyncio.sleep(2)
+
+CREATE_BTN_SELECTORS = [
+    'button:has-text("Create")',
+    'button:has-text("New image")',
+    'button:has-text("New")',
+    'a:has-text("Create")',
+    '[data-testid="create-button"]',
+    'button[aria-label*="Create"]',
+    'button:has(svg.lucide-plus)',
+]
+
+async def ensure_prompt_visible(p):
+    body = await p.text_content("body") or ""
+    LOGIN_URL = "https://chatgpt.com/auth/login"
+    if LOGIN_URL in p.url:
+        return False
+
+    PROMPT_SEL = [
+        '#prompt-textarea',
+        'textarea',
+        '[contenteditable="true"]',
+        'div[contenteditable="true"]',
+        '[data-message-author-role]',
+    ]
+    for sel in PROMPT_SEL:
+        try:
+            el = await p.wait_for_selector(sel, timeout=5000)
+            if el and await el.is_visible():
+                return True
+        except:
+            pass
+
+    await p.screenshot(path="/tmp/worker-no-prompt-initial.png")
+
+    for btn_sel in CREATE_BTN_SELECTORS:
+        try:
+            btn = await p.query_selector(btn_sel)
+            if btn and await btn.is_visible():
+                await btn.click()
+                await asyncio.sleep(3)
+                await wait_stable(p)
+                for sel in PROMPT_SEL:
+                    try:
+                        el = await p.wait_for_selector(sel, timeout=5000)
+                        if el and await el.is_visible():
+                            return True
+                    except:
+                        pass
+        except:
+            pass
+
+    try:
+        await p.keyboard.press("/")
+        await asyncio.sleep(2)
+        for sel in PROMPT_SEL:
+            try:
+                el = await p.wait_for_selector(sel, timeout=3000)
+                if el and await el.is_visible():
+                    return True
+            except:
+                pass
+    except:
+        pass
+
+    return False
+
 async def login(account, cb=None):
     ctx = await new_context(account["cookies"])
     p = await ctx.new_page()
 
     try:
+        LOGIN_CHECK = "https://chatgpt.com/auth/login"
         await p.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30000)
     except PwTimeout:
         await ctx.close()
@@ -98,7 +170,7 @@ async def login(account, cb=None):
         await p.goto(IMAGES_URL, wait_until="domcontentloaded", timeout=20000)
     except:
         pass
-    await asyncio.sleep(5)
+    await wait_stable(p, timeout_sec=10)
 
     name = await capture_profile_name(p)
     if name:
@@ -106,21 +178,13 @@ async def login(account, cb=None):
 
     return p, ctx
 
-PROMPT_SELECTORS = [
-    '#prompt-textarea',
-    'textarea[placeholder*="Describe"]',
-    'textarea[placeholder*="image"]',
-    'textarea[placeholder*="create"]',
-    '[contenteditable="true"]',
-    'div[contenteditable="true"]',
-    'textarea',
-]
-
-SUBMIT_SELECTORS = [
+GENERATE_BTN_SELECTORS = [
     '[data-testid="send-button"]',
     'button[type="submit"]',
-    'button:has(svg)',
+    'button:has(svg.lucide-arrow-up)',
     'button[aria-label*="Send"]',
+    'button:has-text("Generate")',
+    'button:has-text("Send")',
 ]
 
 IMAGE_SELECTORS = [
@@ -129,6 +193,7 @@ IMAGE_SELECTORS = [
     'img[src*="gpt-image"]',
     'img[alt*="DALL"]',
     'img[alt*="Generated"]',
+    'img[src*="image"]',
 ]
 
 STOP_SELECTORS = [
@@ -184,6 +249,7 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
             '[aria-label="Close"]', '.btn-close',
             'button:has-text("Dismiss")',
             'button:has-text("Got it")',
+            'button:has-text("Okay")',
         ]:
             try:
                 btn = await p.query_selector(dismiss_sel)
@@ -193,21 +259,32 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
             except:
                 pass
 
+        await wait_stable(p)
+
+        if not await ensure_prompt_visible(p):
+            await p.screenshot(path="/tmp/worker-prompt-fail.png")
+            await ctx.close()
+            mark_error(account["_id"])
+            if progress_callback:
+                await progress_callback("⚠️ No prompt input found, rotating...")
+            continue
+
         try:
-            ta = await find_visible(p, PROMPT_SELECTORS, timeout=25000)
+            ta = await find_visible(p, [
+                '#prompt-textarea', 'textarea', '[contenteditable="true"]',
+                'div[contenteditable="true"]', '[data-message-author-role]',
+            ], timeout=5000)
             if not ta:
-                await p.screenshot(path="/tmp/worker-no-prompt.png")
-                if progress_callback:
-                    await progress_callback("⚠️ Prompt field not found, screenshot saved")
+                raise Exception("Prompt not found after ensure")
 
             await ta.click()
             await asyncio.sleep(0.5)
             await ta.fill("")
-            await asyncio.sleep(0.5)
-            await p.keyboard.type(prompt, delay=15)
+            await asyncio.sleep(0.3)
+            await p.keyboard.type(prompt, delay=10)
             await asyncio.sleep(1)
 
-            send_btn = await find_visible(p, SUBMIT_SELECTORS, timeout=5000)
+            send_btn = await find_visible(p, GENERATE_BTN_SELECTORS, timeout=5000)
             if send_btn:
                 await send_btn.click()
             else:

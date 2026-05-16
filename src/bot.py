@@ -1,7 +1,3 @@
-"""
-Telegram Bot — styled box messages with full menu, progress, bulk, TXT
-"""
-
 import asyncio, io, json as jmod, re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (Application, CommandHandler, MessageHandler,
@@ -24,40 +20,40 @@ queue_semaphore = asyncio.Semaphore(1)
 
 def main_menu():
     kb = [
-        [InlineKeyboardButton("🖼️ Generate Image", callback_data="gen")],
+        [InlineKeyboardButton("🎨 ✨ Generate Image ✨", callback_data="gen")],
         [InlineKeyboardButton("📋 My Queue", callback_data="myqueue"),
-         InlineKeyboardButton("📊 Status", callback_data="status")],
-        [InlineKeyboardButton("👤 Accounts", callback_data="accounts"),
-         InlineKeyboardButton("❓ Help", callback_data="help")],
+         InlineKeyboardButton("📊 Live Status", callback_data="status")],
+        [InlineKeyboardButton("👥 Accounts Overview", callback_data="accounts"),
+         InlineKeyboardButton("❓ Help & Guide", callback_data="help")],
     ]
     return InlineKeyboardMarkup(kb)
 
 def admin_menu():
     kb = [
-        [InlineKeyboardButton("➕ Add Account", callback_data="add_account")],
-        [InlineKeyboardButton("📦 Export", callback_data="export"),
-         InlineKeyboardButton("📥 Import", callback_data="import_prompt")],
+        [InlineKeyboardButton("➕ Add New Account", callback_data="add_account")],
+        [InlineKeyboardButton("📦 Export Accounts", callback_data="export"),
+         InlineKeyboardButton("📥 Import Accounts", callback_data="import_prompt")],
         [InlineKeyboardButton("🔄 Check Sessions", callback_data="check_sessions"),
-         InlineKeyboardButton("⏰ Reset Limits", callback_data="reset_limits")],
-        [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
+         InlineKeyboardButton("⏰ Reset Limits Now", callback_data="reset_limits")],
+        [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_main")],
     ]
     return InlineKeyboardMarkup(kb)
 
 def size_menu():
     kb = [
-        [InlineKeyboardButton("1:1 Square", callback_data="size_1:1"),
-         InlineKeyboardButton("16:9 Wide", callback_data="size_16:9")],
-        [InlineKeyboardButton("9:16 Portrait", callback_data="size_9:16"),
-         InlineKeyboardButton("4:3 Standard", callback_data="size_4:3")],
-        [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
+        [InlineKeyboardButton("⬜ 1:1 Square", callback_data="size_1:1"),
+         InlineKeyboardButton("🖥️ 16:9 Wide", callback_data="size_16:9")],
+        [InlineKeyboardButton("📱 9:16 Portrait", callback_data="size_9:16"),
+         InlineKeyboardButton("📺 4:3 Standard", callback_data="size_4:3")],
+        [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_main")],
     ]
     return InlineKeyboardMarkup(kb)
 
 def bulk_menu(prompt, image_size):
     kb = [
-        [InlineKeyboardButton("1", callback_data=f"bulk_{prompt[:50]}_{image_size}_1"),
-         InlineKeyboardButton("2", callback_data=f"bulk_{prompt[:50]}_{image_size}_2"),
-         InlineKeyboardButton("4", callback_data=f"bulk_{prompt[:50]}_{image_size}_4")],
+        [InlineKeyboardButton("1️⃣ Single Image", callback_data=f"bulk_{prompt[:50]}_{image_size}_1"),
+         InlineKeyboardButton("2️⃣ Double Pack", callback_data=f"bulk_{prompt[:50]}_{image_size}_2")],
+        [InlineKeyboardButton("4️⃣ Quad Pack", callback_data=f"bulk_{prompt[:50]}_{image_size}_4")],
         [InlineKeyboardButton("🔙 Back", callback_data="gen")],
     ]
     return InlineKeyboardMarkup(kb)
@@ -99,7 +95,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if ud.get("awaiting_import"):
         await update.message.reply_text(
-            box("Import", "Please send a .json file for import."),
+            box("📥 Import",
+                "━━ 📥 *Send Your JSON File* ━━\n\n"
+                "   • 📁 Please upload a `.json` file\n"
+                "   • 📋 Format must match export format\n"
+                "   • 🔄 I'll import all accounts automatically",
+                emoji="📥"),
             parse_mode="Markdown"
         )
         return
@@ -115,11 +116,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if ok:
             ud["awaiting_account_json"] = False
             await update.message.reply_text(
-                box("Account Added",
+                box("➕ Account Added",
                     "━━ ✅ *Successfully Added* ━━\n\n"
                     f"   • 📝 `{msg}`\n"
-                    f"   • 🔄 Ready for image generation\n"
-                    f"   • 🔐 Cookies stored securely",
+                    "   • 🔄 Ready for image generation\n"
+                    "   • 🔐 Cookies stored securely\n\n"
+                    "━━ 📌 *Next Steps* ━━\n"
+                    "   • Check `/status` to see accounts\n"
+                    "   • Send any text to generate images",
                     emoji="➕"),
                 parse_mode="Markdown",
                 reply_markup=main_menu()
@@ -139,7 +143,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if ud.get("awaiting_size"):
         await update.message.reply_text(
-            box("Choose Size", "Select image aspect ratio using buttons below.", emoji="📐"),
+            box("📐 Choose Size",
+                "━━ 📐 *Select Aspect Ratio* ━━\n\n"
+                "   • Pick the image shape you want\n"
+                "   • Use buttons below to choose\n\n"
+                "━━ 📌 *Options* ━━\n"
+                "   • ⬜ 1:1 → Perfect for social media\n"
+                "   • 🖥️ 16:9 → Widescreen / YouTube\n"
+                "   • 📱 9:16 → Phone wallpaper / Stories\n"
+                "   • 📺 4:3 → Classic photo / Presentations",
+                emoji="📐"),
             parse_mode="Markdown",
             reply_markup=size_menu()
         )
@@ -149,11 +162,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt = ud.get("pending_prompt", txt)
         image_size = ud.get("pending_size", "1:1")
         await update.message.reply_text(
-            box(
-                "How Many?",
-                f"Prompt: `{prompt[:50]}`\nSize: {image_size}\n\nChoose image count:",
-                emoji="🔢"
-            ),
+            box("🔢 How Many Images?",
+                f"━━ 🔢 *Select Image Count* ━━\n\n"
+                f"   • ✏️ Prompt: `{prompt[:50]}`\n"
+                f"   • 📐 Size: {image_size}\n\n"
+                "   Choose how many to generate:",
+                emoji="🔢"),
             parse_mode="Markdown",
             reply_markup=bulk_menu(prompt, image_size)
         )
@@ -162,11 +176,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud["pending_prompt"] = txt
     ud["awaiting_size"] = True
     await update.message.reply_text(
-        box(
-            "Choose Size",
-            f"Prompt: `{txt[:100]}`\n\nSelect aspect ratio:",
-            emoji="📐"
-        ),
+        box("📐 Choose Size",
+            f"━━ 📐 *Select Aspect Ratio* ━━\n\n"
+            f"   • ✏️ Prompt: `{txt[:100]}`\n\n"
+            "   Choose image shape below:",
+            emoji="📐"),
         parse_mode="Markdown",
         reply_markup=size_menu()
     )
@@ -177,7 +191,14 @@ async def gen_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
     if not prompt:
         await update.message.reply_text(
-            box("Usage", "Send any text — I'll auto-generate!\nOr: /gen <prompt>"),
+            box("📝 Usage",
+                "━━ 📝 *How to Use /gen* ━━\n\n"
+                "   • `/gen <your prompt>`\n"
+                "   • Example: `/gen a futuristic city`\n\n"
+                "━━ 💡 *Or Just Type* ━━\n"
+                "   • Send any text directly\n"
+                "   • I'll auto-detect and generate!",
+                emoji="📝"),
             parse_mode="Markdown",
             reply_markup=main_menu()
         )
@@ -185,11 +206,11 @@ async def gen_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["pending_prompt"] = prompt
     context.user_data["awaiting_size"] = True
     await update.message.reply_text(
-        box(
-            "Choose Size",
-            f"Prompt: `{prompt[:100]}`\n\nSelect aspect ratio:",
-            emoji="📐"
-        ),
+        box("📐 Choose Size",
+            f"━━ 📐 *Select Aspect Ratio* ━━\n\n"
+            f"   • ✏️ Prompt: `{prompt[:100]}`\n\n"
+            "   Choose image shape below:",
+            emoji="📐"),
         parse_mode="Markdown",
         reply_markup=size_menu()
     )
@@ -206,21 +227,27 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             data = jmod.loads(content)
             count = import_accounts(data)
-    await update.message.reply_text(
-        box("Import",
-            "━━ ✅ *Import Successful* ━━\n\n"
-            f"   • 📥 Imported `{count}` account(s)\n"
-            f"   • 🔄 Ready for image generation\n"
-            f"   • 🏷️ Duplicates auto-renamed with suffix",
-            emoji="📥"),
-        parse_mode="Markdown",
-        reply_markup=main_menu()
-    )
+            await update.message.reply_text(
+                box("📥 Import Complete",
+                    "━━ ✅ *Import Successful* ━━\n\n"
+                    f"   • 📥 Imported `{count}` account(s)\n"
+                    f"   • 🔄 Ready for image generation\n"
+                    f"   • 🏷️ Duplicates auto-renamed\n\n"
+                    "━━ 📌 *Status* ━━\n"
+                    "   All accounts synced to database",
+                    emoji="📥"),
+                parse_mode="Markdown",
+                reply_markup=main_menu()
+            )
         except Exception as e:
             await update.message.reply_text(
-                error_box("Import Failed", str(e)[:100],
-                          reasons=["Invalid JSON", "Wrong format"],
-                          tips=["Check file structure", "Try exporting first"]),
+                error_box("😵‍💫 Import Failed!", str(e)[:100],
+                          reasons=["❌ Invalid JSON structure",
+                                   "📋 File doesn't match export format",
+                                   "🔤 Encoding issues detected"],
+                          tips=["📦 Export an account first to see format",
+                                 "📄 Make sure file is valid JSON",
+                                 "📬 Contact @TurabCoder if needed"]),
                 parse_mode="Markdown"
             )
         return
@@ -231,14 +258,14 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompts = [p.strip() for p in re.split(r'\n\s*\n', content) if p.strip()]
         if not prompts:
             await update.message.reply_text(
-                box("No Prompts Found",
-                    "━━ 📭 *Empty File* ━━\n\n"
-                    "   • 📄 No prompts detected in your file\n"
-                    "   • 📝 Separate each prompt by a blank line\n"
-                    "   • ✅ Example:\n"
-                    "      `a cat`\n"
-                    "      `(blank line)`\n"
-                    "      `a dog`",
+                box("📭 Empty File",
+                    "━━ 📭 *No Prompts Found* ━━\n\n"
+                    "   • 📄 Your `.txt` file is empty\n"
+                    "   • 📝 Separate each prompt by blank line\n\n"
+                    "━━ ✅ *Example Format* ━━\n"
+                    "   `a red sports car`\n"
+                    "   `(blank line)`\n"
+                    "   `a blue ocean view`",
                     emoji="📭"),
                 parse_mode="Markdown"
             )
@@ -247,20 +274,26 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["pending_bulk_file"] = prompts
         context.user_data["awaiting_size"] = True
         await update.message.reply_text(
-            box(
-                "File Upload",
-                f"📄 Found **{len(prompts)}** prompts.\n"
-                f"First: `{prompts[0][:50]}`\n\n"
-                "Choose image size for ALL prompts:",
-                emoji="📁"
-            ),
+            box("📁 File Uploaded",
+                "━━ 📁 *File Processed Successfully* ━━\n\n"
+                f"   • 📄 Found **{len(prompts)}** prompts\n"
+                f"   • 📝 First: `{prompts[0][:50]}`\n\n"
+                "━━ 📐 *Choose Image Size* ━━\n"
+                "   This size will apply to ALL prompts",
+                emoji="📁"),
             parse_mode="Markdown",
             reply_markup=size_menu()
         )
         return
 
     await update.message.reply_text(
-        box("Unsupported", "Send .txt file for prompts\nor .json for account import."),
+        box("❌ Unsupported File",
+            "━━ ❌ *File Type Not Supported* ━━\n\n"
+            "   • Send `.txt` for text prompts\n"
+            "   • Send `.json` for account import\n\n"
+            "━━ 💡 *Need Help?* ━━\n"
+            "   Use /menu to see all options",
+            emoji="❌"),
         parse_mode="Markdown"
     )
 
@@ -290,18 +323,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 count += 1
             ud.pop("pending_size", None)
             await query.edit_message_text(
-                box(
-                    "Bulk Queued",
+                box("✅ Bulk Queued",
                     "━━ ✅ *Bulk Upload Successful* ━━\n\n"
                     f"   • 📥 Added `{count}` prompts from file\n"
                     f"   • 📐 Size: `{image_size}`\n"
                     f"   • 🎯 Position: `#{Queue.get_pending_count()}`\n\n"
-                    "━━ ⏰ *Next Steps* ━━\n"
-                    "   • 🔄 Processing in background\n"
-                    "   • 📬 Each image sent here as ready\n"
-                    "   • 📊 Check `/menu` for status",
-                    emoji="✅"
-                ),
+                    "━━ ⏰ *What Now?* ━━\n"
+                    "   • 🔄 Processing automatically in background\n"
+                    "   • 📬 Each image sent here when ready\n"
+                    "   • 📊 Check status anytime",
+                    emoji="✅"),
                 parse_mode="Markdown",
                 reply_markup=main_menu()
             )
@@ -310,7 +341,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not prompt:
             await query.edit_message_text(
-                box("Error", "No prompt found. Send text again.", emoji="❌"),
+                box("❌ Error",
+                    "━━ ❌ *No Prompt Found* ━━\n\n"
+                    "   • 📝 Please send your text again\n"
+                    "   • 🔄 I'll restart the process",
+                    emoji="❌"),
                 parse_mode="Markdown",
                 reply_markup=main_menu()
             )
@@ -318,11 +353,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         ud["awaiting_bulk"] = True
         await query.edit_message_text(
-            box(
-                "How Many?",
-                f"Prompt: `{prompt[:50]}`\nSize: {image_size}\n\nChoose image count:",
-                emoji="🔢"
-            ),
+            box("🔢 How Many Images?",
+                f"━━ 🔢 *Select Image Count* ━━\n\n"
+                f"   • ✏️ Prompt: `{prompt[:50]}`\n"
+                f"   • 📐 Size: {image_size}\n\n"
+                "   Choose how many to generate:",
+                emoji="🔢"),
             parse_mode="Markdown",
             reply_markup=bulk_menu(prompt, image_size)
         )
@@ -337,7 +373,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             bulk_count = int(parts[3])
         else:
             await query.edit_message_text(
-                box("Error", "Failed to parse bulk data.", emoji="❌"),
+                box("❌ Error",
+                    "━━ ❌ *Something went wrong* ━━\n\n"
+                    "   • Please start again from /menu",
+                    emoji="❌"),
                 parse_mode="Markdown",
                 reply_markup=main_menu()
             )
@@ -351,8 +390,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         Queue.add(prompt, user_id, image_size=image_size, bulk_count=bulk_count)
         pending = Queue.get_pending_count()
 
+        count_label = {1: "1️⃣ Single", 2: "2️⃣ Double", 4: "4️⃣ Quad"}.get(bulk_count, f"{bulk_count}x")
         await query.edit_message_text(
-            queued_box(prompt[:50], image_size, bulk_count, pending),
+            queued_box(prompt[:50], image_size, count_label, pending),
             parse_mode="Markdown",
             reply_markup=main_menu()
         )
@@ -364,12 +404,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "gen":
         ud["awaiting_prompt"] = True
         await query.edit_message_text(
-            box(
-                "Generate",
-                "Send me any text — I'll auto-generate!\n"
-                "Or upload a .txt file with prompts.",
-                emoji="🖼️"
-            ),
+            box("🎨 Generate Image",
+                "━━ 🎨 *Ready to Create!* ━━\n\n"
+                "   • 📝 Send me any text description\n"
+                "   • 🖼️ I'll generate an image using AI\n"
+                "   • 📁 Or upload a `.txt` file\n\n"
+                "━━ 💡 *Example Prompts* ━━\n"
+                "   • `a cat wearing a hat`\n"
+                "   • `futuristic city at night`\n"
+                "   • `a beautiful mountain landscape`\n\n"
+                "━━ ⏰ *Go Ahead* ━━\n"
+                "   Type your prompt now!",
+                emoji="🎨"),
             parse_mode="Markdown",
             reply_markup=main_menu()
         )
@@ -379,19 +425,38 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         items = Queue.get_user_queue(user_id)
         if not items:
             await query.edit_message_text(
-                box("Your Queue", "Your queue is empty!", emoji="📋"),
+                box("📋 Your Queue",
+                    "━━ 📋 *Queue Status* ━━\n\n"
+                    "   • ✅ Your queue is empty!\n"
+                    "   • 🎨 Send a prompt to get started\n"
+                    "   • ⚡ No pending tasks right now",
+                    emoji="📋"),
                 parse_mode="Markdown",
                 reply_markup=main_menu()
             )
             return
         icon = {"pending": "⏳", "processing": "🔄", "done": "✅", "fail": "❌"}
-        lines = [SEP, "📋 *Your Queue*", ""]
+        lines = [
+            SEP,
+            "📋 *Your Queue*",
+            DIV,
+            f"   • 📊 *Total:* {len(items)} item(s)",
+            "",
+        ]
         for item in items[-15:]:
             si = icon.get(item["status"], "❓")
             p = item["prompt"][:30]
             batch = f" ({item.get('batch_index',0)+1}/{item.get('batch_total',1)})" if item.get('batch_total',1) > 1 else ""
-            lines.append(f"• {si} `{p}`{batch}")
-        lines += ["", f"*Total:* {len(items)}", END]
+            lines.append(f"   • {si} `{p}`{batch}")
+        lines += [
+            "",
+            SEP,
+            "━━ 📌 *Status Guide* ━━",
+            "   ⏳ Pending    🔄 Processing",
+            "   ✅ Done       ❌ Failed",
+            END,
+            "_🤖 Powered by @TurabCoder_",
+        ]
         await query.edit_message_text("\n".join(lines), parse_mode="Markdown", reply_markup=main_menu())
         return
 
@@ -400,8 +465,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ac = Account.count()
         ses = get_session_status()
         text = status_box(ac, qs['pending'], qs.get('processing',0), qs['done'], qs['fail'], ses)
-        kb = [[InlineKeyboardButton("🔄 Refresh", callback_data="status"),
-               InlineKeyboardButton("🔙 Back", callback_data="back_main")]]
+        kb = [[InlineKeyboardButton("🔄 Refresh Status", callback_data="status"),
+               InlineKeyboardButton("🔙 Back to Menu", callback_data="back_main")]]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
         return
 
@@ -420,9 +485,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             name = d.get("profile_name") or d.get("label", f"#{i+1}")
             exp = "❌" if d.get("expired") else ("⏳" if d.get("limited") else "✅")
             src = "🌐" if d.get("source") == "extension" else "📦"
-            lines.append(f"{src}{exp} {i+1}. `{name}` ({c}ck)")
+            lines.append(f"   • {src}{exp} `{name}` ({c} cookies)")
         if len(docs) > 10:
-            lines.append(f"\n...and {len(docs)-10} more")
+            lines.append(f"\n   • ...and {len(docs)-10} more")
         await query.edit_message_text(accounts_box(lines), parse_mode="Markdown", reply_markup=main_menu())
         return
 
@@ -435,18 +500,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "admin" and is_adm:
         text = (
             "━━━━━━━━━━━━━━━━━━━\n"
-            "⚙️ *🛠️ Admin Control Panel* ⚙️\n"
+            "⚙️ *Admin Control Panel* ⚙️\n"
             "─────────────────────\n\n"
-            "👋 *Welcome, Admin!*\n\n"
             "━━ 📋 *Available Actions* ━━\n"
-            "   • ➕ *Add Account* — Paste cookies JSON\n"
-            "   • 📦 *Export* — Download all accounts\n"
-            "   • 📥 *Import* — Upload accounts JSON\n"
-            "   • 🔄 *Check Sessions* — Validate & reset\n\n"
-            "━━ 📌 *Tips* ━━\n"
-            "   • Accounts auto-rotate on limits\n"
-            "   • Limits auto-reset every 5 minutes\n"
-            "   • Expired sessions notify you instantly\n"
+            "   • ➕ Add Account — Paste cookies JSON\n"
+            "   • 📦 Export — Download all accounts\n"
+            "   • 📥 Import — Upload accounts JSON\n"
+            "   • 🔄 Check Sessions — Validate all\n"
+            "   • ⏰ Reset Limits — Restore limited accts\n\n"
+            "━━ ⚙️ *Auto-Systems* ━━\n"
+            "   • 🔄 Session check: Every 30 minutes\n"
+            "   • ⏰ Limit reset: Every 5 minutes\n"
+            "   • 📬 Notifications sent here\n\n"
             "━━━━━━━━━━━━━━━━━━━\n"
             "─────────────────────"
         )
@@ -457,10 +522,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data_list = export_accounts()
         if not data_list:
             await query.edit_message_text(
-                box("Export",
+                box("📦 Export",
                     "━━ 📭 *Nothing to Export* ━━\n\n"
                     "   • 📦 No accounts found in database\n"
-                    "   • ➕ Add accounts first via Admin panel\n"
+                    "   • ➕ Add accounts first via Admin\n"
                     "   • 🌐 Or sync via Chrome extension",
                     emoji="📦"),
                 parse_mode="Markdown",
@@ -471,15 +536,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bio.name = "gpt-accounts.json"
         await query.message.reply_document(bio, caption="📦 GPT Accounts Export — @TurabCoder")
         await query.edit_message_text(
-            box("Export",
+            box("📦 Export Complete",
                 "━━ ✅ *Export Successful* ━━\n\n"
                 f"   • 📄 File: `gpt-accounts.json`\n"
                 f"   • 👤 Accounts: {len(data_list)}\n"
                 f"   • 🔐 Data: Cookies (Keep Private!)\n\n"
-                f"━━ ⚠️ *Security Warning* ━━\n"
-                f"   • 🔒 Keep this file secure!\n"
-                f"   • 🚫 Never share with anyone\n"
-                f"   • 🗑️ Delete after use if possible",
+                "━━ ⚠️ *Security Warning* ━━\n"
+                "   • 🔒 Keep this file secure!\n"
+                "   • 🚫 Never share with anyone\n"
+                "   • 🗑️ Delete after use if possible",
                 emoji="📦"),
             parse_mode="Markdown",
             reply_markup=admin_menu()
@@ -489,14 +554,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "import_prompt" and is_adm:
         context.user_data["awaiting_import"] = True
         await query.edit_message_text(
-            box("Import",
+            box("📥 Import",
                 "━━ 📥 *Import Accounts* ━━\n\n"
                 "   • 📁 Send a `.json` file to import\n"
                 "   • 📋 Format: Export format only\n"
-                "   • 🔄 Duplicates will be auto-renamed\n\n"
-                "━━ ⚠️ *Note* ━━\n"
+                "   • 🔄 Duplicates auto-renamed\n\n"
+                "━━ ⚠️ *Important* ━━\n"
                 "   • Existing labels get `-N` suffix\n"
-                "   • Invalid entries are skipped",
+                "   • Invalid entries are skipped\n"
+                "   • Send the file now!",
                 emoji="📥"),
             parse_mode="Markdown",
             reply_markup=admin_menu()
@@ -507,16 +573,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["awaiting_account_json"] = True
         text = (
             "━━━━━━━━━━━━━━━━━━━\n"
-            "➕ *📥 Add New Account* ➕\n"
+            "➕ *Add New Account* ➕\n"
             "─────────────────────\n\n"
             "━━ 📋 *Instructions* ━━\n\n"
-            "   • 📋 Paste cookies JSON array from Chrome extension\n"
-            "   • 📝 Format: `[{\"name\":\"...\",\"value\":\"...\",...}]`\n\n"
-            "━━ 🔖 *Optional: Custom Label* ━━\n\n"
-            "   • Send label first, then cookies:\n"
-            "   • `MyAccountName | [{\"name\"...}]`\n\n"
+            "   • 📋 Paste cookies JSON from Chrome extension\n"
+            "   • 📝 Format:\n"
+            "      `[{\"name\":\"...\",\"value\":\"...\",...}]`\n\n"
+            "━━ 🔖 *Custom Label (Optional)* ━━\n\n"
+            "   • `MyName | [{\"name\"...}]`\n\n"
             "━━ ⚠️ *Important* ━━\n"
-            "   • 🔐 Keep cookies private & secure\n"
+            "   • 🔐 Keep cookies private\n"
             "   • 🔄 Same label = auto-update\n"
             "   • ❌ Invalid JSON will be rejected\n"
             "━━━━━━━━━━━━━━━━━━━\n"
@@ -527,7 +593,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "check_sessions" and is_adm:
         await query.edit_message_text(
-            box("Sessions", "🔄 Checking sessions & resetting limits...", emoji="🔄"),
+            box("🔄 Sessions",
+                "━━ 🔄 *Checking All Sessions* ━━\n\n"
+                "   • 🔍 Validating account cookies...\n"
+                "   • ⏰ Checking limit timers...\n"
+                "   • ⏳ Please wait, this may take a moment",
+                emoji="🔄"),
             parse_mode="Markdown"
         )
         await check_session()
@@ -535,9 +606,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ses = get_session_status()
         lines = [
             SEP,
-            "✅ *✅ Session Check Complete* ✅",
+            "✅ *Session Check Complete* ✅",
             DIV,
-            f"🔄 *Limits Reset:* {n} account(s) restored",
+            f"   • 🔄 Limits Reset: `{n}` account(s)",
             "",
             "━━ 📋 *Account Status Report* ━━",
         ]
@@ -546,8 +617,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines += [
             "",
             SEP,
-            "━━ 📌 *Legend* ━━",
-            "   ✅ Active    ❌ Expired    ⏳ Limited    ⚠️ Errors",
+            "━━ 📌 *Status Legend* ━━",
+            "   ✅ Active    ❌ Expired",
+            "   ⏳ Limited   ⚠️ Errors",
             END,
             "_🤖 Powered by @TurabCoder_",
         ]
@@ -561,15 +633,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ses = get_session_status()
         lines = [
             SEP,
-            "⏰ *🔄 Limit Reset Complete* 🔄",
+            "⏰ *Limit Reset Complete* 🔄",
             DIV,
-            f"🔄 *Restored:* {n} account(s)",
+            f"   • 🔄 Restored: `{n}` account(s)",
             "",
             "━━ 📋 *Current Status* ━━",
         ]
         for s in ses:
             lines.append(f"   • {s}")
-        lines += [SEP, END, "_🤖 Powered by @TurabCoder_"]
+        lines += [
+            SEP,
+            "━━ 📌 *Legend* ━━",
+            "   ✅ Active    ❌ Expired",
+            "   ⏳ Limited   ⚠️ Errors",
+            END,
+            "_🤖 Powered by @TurabCoder_",
+        ]
         await query.edit_message_text("\n".join(lines), parse_mode="Markdown", reply_markup=admin_menu())
         return
 
@@ -631,8 +710,11 @@ async def process_queue():
                 if progress_msg:
                     try:
                         await progress_msg.edit_text(
-                            error_box("Failed", f"`{prompt[:40]}`\n\n{err}",
-                                      tips=["Try again later", "Check account status"]),
+                            error_box("😵‍💫 Generation Failed",
+                                      f"`{prompt[:40]}`\n\n{err}",
+                                      tips=["🔄 Try again in a few minutes",
+                                            "✅ Check account status in admin",
+                                            "📬 Contact @TurabCoder for help"]),
                             parse_mode="Markdown"
                         )
                     except Exception:
