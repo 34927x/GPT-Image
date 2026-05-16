@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="sidebar.css">
+<title>GPT Rotator</title>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="h-l"><span class="h-i">⟳</span><h1>GPT Rotator</h1><span class="h-b" id="acctCount">0</span></div>
+    <div class="h-r"><button class="h-bt" id="themeBtn">☀️</button></div>
+  </header>
+
+  <div class="st" id="statusBar"><span id="statusText">Ready</span></div>
+
+  <nav class="nv">
+    <button class="nv-b active" data-tab="accounts"><span>👤</span> Accounts</button>
+    <button class="nv-b" data-tab="bulk"><span>🖼️</span> Bulk</button>
+    <button class="nv-b" data-tab="settings"><span>⚙️</span> Settings</button>
+  </nav>
+
+  <div class="bd">
+    <!-- ============ ACCOUNTS ============ -->
+    <section class="pn active" id="pn-accounts">
+      <div class="ac">
+        <button class="b b-p" id="captureBtn"><span>+</span> Capture</button>
+        <button class="b b-a" id="rotateBtn"><span>⟳</span> Switch</button>
+        <button class="b b-o" id="exportBtn" title="Export JSON">↓</button>
+        <button class="b b-o" id="importBtn" title="Import JSON">↑</button>
+      </div>
+
+      <div class="cd" id="captureForm">
+        <div class="cd-h">Save current chatgpt.com login</div>
+        <input class="inp" id="labelInput" placeholder="e.g. Work Account">
+        <div class="ac" style="margin-top:8px">
+          <button class="b b-p b-s" id="saveCapture">Save</button>
+          <button class="b b-g b-s" id="cancelCapture">Cancel</button>
+        </div>
+      </div>
+
+      <input type="file" accept=".json" id="importFile" class="fi">
+
+      <div id="accountList"><div class="em">No accounts yet. Login to <b>chatgpt.com</b> → Capture</div></div>
+    </section>
+
+    <!-- ============ BULK ============ -->
+    <section class="pn" id="pn-bulk">
+      <div class="cd">
+        <div class="cd-h">Image Prompts</div>
+        <p class="cd-s">One prompt per line. Blank line = separate prompt.</p>
+        <textarea class="inp ta" id="promptsInput" placeholder="a cute cat&#10;&#10;a futuristic city&#10;neon cyberpunk street"></textarea>
+      </div>
+
+      <div class="ac">
+        <button class="b b-p" id="queueStart"><span>▶</span> Start</button>
+        <button class="b b-d" id="queueStop"><span>■</span> Stop</button>
+        <button class="b b-o" id="loadTxtBtn"><span>📁</span> .txt</button>
+        <button class="b b-g" id="queueClear">✕</button>
+      </div>
+
+      <input type="file" accept=".txt" id="txtFile" class="fi">
+
+      <div class="sg" id="statsArea">
+        <div class="sg-b"><div class="sg-v" id="statDone">0</div><div class="sg-l">Done</div></div>
+        <div class="sg-b"><div class="sg-v" id="statTotal">0</div><div class="sg-l">Total</div></div>
+        <div class="sg-b"><div class="sg-v" id="statFail">0</div><div class="sg-l">Failed</div></div>
+        <div class="sg-b"><div class="sg-v" id="statLeft">0</div><div class="sg-l">Left</div></div>
+      </div>
+
+      <div class="pr"><div class="pr-b" id="progressBar"></div></div>
+      <div class="ql" id="queueLog"></div>
+
+      <div class="ac" style="margin-top:6px">
+        <button class="b b-a" id="downloadZipBtn"><span>📦</span> Download All as ZIP</button>
+      </div>
+    </section>
+
+    <!-- ============ SETTINGS ============ -->
+    <section class="pn" id="pn-settings">
+      <div class="cd">
+        <div class="cd-h">Theme</div>
+        <div class="ac">
+          <button class="b b-p b-s" id="themeDark">🌙 Dark</button>
+          <button class="b b-o b-s" id="themeLight">☀️ Light</button>
+        </div>
+      </div>
+
+      <div class="cd">
+        <div class="cd-h">Quick Actions</div>
+        <div class="ac">
+          <button class="b b-a b-s" id="openChatGPT">Open chatgpt.com</button>
+          <button class="b b-o b-s" id="refreshCookies">↻ Cookies</button>
+        </div>
+      </div>
+
+      <div class="cd">
+        <div class="cd-h">Server Sync (MongoDB)</div>
+        <p class="cd-s">Auto-send captured cookies to your Telegram bot server.</p>
+        <input class="inp" id="serverUrl" placeholder="https://your-bot.herokuapp.com" style="margin-bottom:6px">
+        <button class="b b-p b-s" id="saveServerUrl">Save</button>
+        <span id="serverStatus" style="margin-left:8px;font-size:12px"></span>
+      </div>
+
+      <div class="cd">
+        <div class="cd-h">About</div>
+        <div class="ab">
+          <p class="ab-t"><strong>GPT Multi-Account Rotator</strong> v3.0</p>
+          <p class="ab-c">by <strong>TurabCoder</strong></p>
+          <ul class="ab-f">
+            <li>Multi-account rotation</li>
+            <li>Auto rate-limit detect</li>
+            <li>Bulk image generation</li>
+            <li>Auto ZIP download</li>
+            <li>Export/Import accounts</li>
+            <li>Image naming with credit</li>
+          </ul>
+          <p class="ab-c ab-e">Made with ❤️ by <strong>TurabCoder</strong></p>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+<script src="lib/zip.js"></script>
+<script src="sidebar.js"></script>
+</body>
+</html>
