@@ -1,5 +1,7 @@
 const STORAGE_KEY = 'gpt_accounts_v2';
 const ACTIVE_KEY = 'gpt_active_account_v2';
+const SERVER_URL_KEY = 'gpt_server_url';
+const API_KEY_STORAGE = 'gpt_api_key';
 const CAPTURE_DOMAINS = ['chatgpt.com', '.openai.com'];
 const RATE_LIMIT_THRESHOLD = 2;
 
@@ -46,6 +48,8 @@ api.runtime.onMessage.addListener((req, sender, sendResponse) => {
         case 'openChatGPT': await api.tabs.create({ url: 'https://chatgpt.com' }); return { ok: 1 };
         case 'getServerUrl': return await sGet(SERVER_URL_KEY, '');
         case 'setServerUrl': await sSet(SERVER_URL_KEY, req.url); return { ok: 1 };
+        case 'getApiKey': return await sGet(API_KEY_STORAGE, '');
+        case 'setApiKey': await sSet(API_KEY_STORAGE, req.key); return { ok: 1 };
         case 'pushCookies': return await pushCookiesToServer(req.label, req.cookies);
       }
     } catch (e) { return { error: e.message }; }
@@ -156,15 +160,19 @@ async function restoreCookies(cookies) {
 }
 
 // ── Push cookies to server (auto-sync to MongoDB) ──
-const SERVER_URL_KEY = 'gpt_server_url';
 
 async function pushCookiesToServer(label, cookies) {
   const serverUrl = await sGet(SERVER_URL_KEY, '');
   if (!serverUrl) return { pushed: false, reason: 'No server URL set' };
   try {
+    const apiKey = await sGet(API_KEY_STORAGE, '');
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) {
+      headers['X-API-Key'] = apiKey;
+    }
     const resp = await fetch(serverUrl.replace(/\/+$/, '') + '/api/cookies', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: headers,
       body: JSON.stringify({ label, cookies })
     });
     const result = await resp.json();

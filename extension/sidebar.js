@@ -10,7 +10,7 @@ const $ = id => document.getElementById(id);
 const el = {};
 
 function cache() {
-  'statusText,acctCount,accountList,captureBtn,rotateBtn,exportBtn,importBtn,captureForm,labelInput,saveCapture,cancelCapture,importFile,promptsInput,queueStart,queueStop,queueClear,loadTxtBtn,txtFile,statsArea,statDone,statTotal,statFail,statLeft,progressBar,queueLog,downloadZipBtn,themeBtn,themeDark,themeLight,openChatGPT,refreshCookies,serverUrl,saveServerUrl,serverStatus'.split(',').forEach(id => el[id] = $(id));
+  'statusText,acctCount,accountList,captureBtn,rotateBtn,exportBtn,importBtn,captureForm,labelInput,saveCapture,cancelCapture,importFile,promptsInput,queueStart,queueStop,queueClear,loadTxtBtn,txtFile,statsArea,statDone,statTotal,statFail,statLeft,progressBar,queueLog,downloadZipBtn,themeBtn,themeDark,themeLight,openChatGPT,refreshCookies,serverUrl,apiKey,saveServerUrl,serverStatus'.split(',').forEach(id => el[id] = $(id));
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -67,14 +67,17 @@ function initSettings() {
   el.openChatGPT.onclick = () => api.runtime.sendMessage({ action: 'openChatGPT' });
   el.refreshCookies.onclick = async () => { await api.runtime.sendMessage({ action: 'refreshCookies' }); setSt('Cookies refreshed'); };
 
-  // Server URL
+  // Server URL + API Key
   api.runtime.sendMessage({ action: 'getServerUrl' }).then(url => { if (url) el.serverUrl.value = url; });
+  api.runtime.sendMessage({ action: 'getApiKey' }).then(key => { if (key) el.apiKey.value = key; });
   el.saveServerUrl.onclick = async () => {
     const url = el.serverUrl.value.trim();
+    const key = el.apiKey.value.trim();
     await api.runtime.sendMessage({ action: 'setServerUrl', url });
+    await api.runtime.sendMessage({ action: 'setApiKey', key });
     el.serverStatus.textContent = '✅ Saved';
     setTimeout(() => el.serverStatus.textContent = '', 2000);
-    setSt('Server URL saved');
+    setSt('Server URL & API key saved');
   };
 }
 

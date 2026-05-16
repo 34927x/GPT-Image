@@ -17,7 +17,7 @@ sessions_col = db["sessions"]
 
 async def init_db():
     try:
-        await asyncio.get_event_loop().run_in_executor(
+        await asyncio.get_running_loop().run_in_executor(
             None, lambda: _client.admin.command('ping')
         )
     except Exception as e:
@@ -26,16 +26,16 @@ async def init_db():
         return
 
     try:
-        await asyncio.get_event_loop().run_in_executor(
+        await asyncio.get_running_loop().run_in_executor(
             None, lambda: accounts_col.create_index("label", unique=True, sparse=True)
         )
-        await asyncio.get_event_loop().run_in_executor(
+        await asyncio.get_running_loop().run_in_executor(
             None, lambda: queue_col.create_index("status")
         )
-        await asyncio.get_event_loop().run_in_executor(
+        await asyncio.get_running_loop().run_in_executor(
             None, lambda: queue_col.create_index("created_at")
         )
-        await asyncio.get_event_loop().run_in_executor(
+        await asyncio.get_running_loop().run_in_executor(
             None, lambda: settings_col.create_index("key", unique=True)
         )
     except Exception as e:

@@ -9,7 +9,7 @@ import config
 from db import init_db, queue_col, accounts_col
 from models import Queue, Account
 from bot import (start, menu_command, gen_command, button_handler,
-                 handle_text, handle_file, process_queue)
+                 handle_text, handle_file, process_queue, status_command)
 from accounts.manager import reset_limited_accounts
 
 telegram_app = None
@@ -26,6 +26,7 @@ async def lifespan(app: FastAPI):
     telegram_app.add_handler(CommandHandler("start", start))
     telegram_app.add_handler(CommandHandler("menu", menu_command))
     telegram_app.add_handler(CommandHandler("gen", gen_command))
+    telegram_app.add_handler(CommandHandler("status", status_command))
     telegram_app.add_handler(CallbackQueryHandler(button_handler))
     telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     telegram_app.add_handler(MessageHandler(filters.Document.ALL, handle_file))

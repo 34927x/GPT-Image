@@ -1,12 +1,16 @@
-import asyncio, traceback
+import asyncio, re
 from datetime import datetime, timezone
 from playwright.async_api import async_playwright, TimeoutError as PwTimeout
+from playwright_stealth import stealth_async  # Cloudflare bot detection bypass
 
 from models import Account
 from accounts.manager import (
     get_next_account, mark_success, mark_error, mark_expired,
     mark_limited, update_profile_name, parse_limit_reset_time,
 )
+
+# Global lock: only one task uses the browser at a time to prevent crashes
+worker_lock = asyncio.Lock()
 
 CHATGPT_URL = "https://chatgpt.com"
 IMAGES_URL = "https://chatgpt.com/images"
@@ -21,10 +25,11 @@ async def get_browser():
         _browser = await p.chromium.launch(
             headless=True,
             args=[
+                "--disable-blink-features=AutomationControlled",  # Cloudflare bypass
                 "--no-sandbox", "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage", "--disable-gpu",
                 "--single-process", "--disable-accelerated-2d-canvas",
-                "--no-first-run", "--disable-web-security",
+                "--no-first-run",
             ]
         )
     return _browser
@@ -39,7 +44,7 @@ async def new_context(cookies):
     b = await get_browser()
     ctx = await b.new_context(
         viewport={"width": 1280, "height": 800},
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
         locale="en-US", timezone_id="America/New_York"
     )
     if cookies:
@@ -66,11 +71,10 @@ async def capture_profile_name(p):
                     return txt
         except:
             pass
-    import re as _re
-    m = _re.search(r'"user_name"\s*:\s*"([^"]+)"', body)
+    m = re.search(r'"user_name"\s*:\s*"([^"]+)"', body)
     if m:
         return m.group(1)
-    m = _re.search(r'"name"\s*:\s*"([^"]+)"', body)
+    m = re.search(r'"name"\s*:\s*"([^"]+)"', body)
     if m:
         return m.group(1)
     return None
@@ -94,7 +98,6 @@ CREATE_BTN_SELECTORS = [
 
 async def ensure_prompt_visible(p):
     body = await p.text_content("body") or ""
-    LOGIN_URL = "https://chatgpt.com/auth/login"
     if LOGIN_URL in p.url:
         return False
 
@@ -147,18 +150,42 @@ async def ensure_prompt_visible(p):
 
     return False
 
+async def dismiss_popups(page):
+    """Dismiss ChatGPT random 'Welcome', 'Tips', or cookie popups"""
+    for sel in [
+        'button:has-text("Okay, let\'s go")',
+        'button:has-text("Got it")',
+        'button:has-text("Stay logged out")',
+        'button:has-text("Continue")',
+        'button:has-text("Dismiss")',
+        'button:has-text("Okay")',
+        '[aria-label="Close"]',
+        '.btn-close',
+    ]:
+        try:
+            btn = await page.query_selector(sel)
+            if btn and await btn.is_visible():
+                await btn.click()
+                await asyncio.sleep(1)
+        except:
+            pass
+
 async def login(account, cb=None):
     ctx = await new_context(account["cookies"])
     p = await ctx.new_page()
 
+    # Apply stealth to bypass Cloudflare bot detection
+    await stealth_async(p)
+
     try:
-        LOGIN_CHECK = "https://chatgpt.com/auth/login"
-        await p.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30000)
+        await p.goto(CHATGPT_URL, wait_until="networkidle", timeout=45000)
     except PwTimeout:
         await ctx.close()
         return None, None
 
-    await asyncio.sleep(3)
+    await asyncio.sleep(5)  # Cloudflare challenge time
+    await dismiss_popups(p)
+
     if LOGIN_URL in p.url:
         mark_expired(account["_id"])
         await ctx.close()
@@ -193,7 +220,6 @@ IMAGE_SELECTORS = [
     'img[src*="gpt-image"]',
     'img[alt*="DALL"]',
     'img[alt*="Generated"]',
-    'img[src*="image"]',
 ]
 
 STOP_SELECTORS = [
@@ -221,6 +247,7 @@ def display_name(account):
     return account.get("profile_name") or account.get("label", "Account")
 
 async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=None):
+  async with worker_lock:
     for attempt in range(retry):
         account = get_next_account()
         if not account:
@@ -277,9 +304,7 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
             if not ta:
                 raise Exception("Prompt not found after ensure")
 
-            await ta.click()
-            await asyncio.sleep(0.5)
-            await ta.fill("")
+            await ta.click(click_count=3)  # triple-click to select all text
             await asyncio.sleep(0.3)
             await p.keyboard.type(prompt, delay=10)
             await asyncio.sleep(1)
@@ -340,8 +365,9 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
     return {"success": False, "error": "All accounts exhausted"}
 
 async def wait_for_image(p, timeout=180000):
-    deadline = asyncio.get_event_loop().time() + (timeout / 1000)
-    while asyncio.get_event_loop().time() < deadline:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + (timeout / 1000)
+    while loop.time() < deadline:
         img = await find_visible(p, IMAGE_SELECTORS, timeout=15000)
         if img:
             return await img.get_attribute("src")
@@ -355,25 +381,28 @@ async def wait_for_image(p, timeout=180000):
     return None
 
 async def check_session():
+  async with worker_lock:
     docs = Account.get_all()
     expired = []
     for d in docs:
         if d.get("expired"):
             expired.append(d)
             continue
+        ctx = None
         try:
-            b = await get_browser()
             ctx = await new_context(d["cookies"])
             p = await ctx.new_page()
-            await p.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=20000)
-            await asyncio.sleep(3)
+            await stealth_async(p)
+            await p.goto(CHATGPT_URL, wait_until="networkidle", timeout=45000)
+            await asyncio.sleep(5)
             if LOGIN_URL in p.url:
                 mark_expired(d["_id"])
                 expired.append(d)
             await ctx.close()
         except Exception:
-            try:
-                await ctx.close()
-            except:
-                pass
+            if ctx:
+                try:
+                    await ctx.close()
+                except:
+                    pass
     return expired

@@ -20,40 +20,41 @@ queue_semaphore = asyncio.Semaphore(1)
 
 def main_menu():
     kb = [
-        [InlineKeyboardButton("🎨 ✨ Generate Image ✨", callback_data="gen")],
-        [InlineKeyboardButton("📋 My Queue", callback_data="myqueue"),
-         InlineKeyboardButton("📊 Live Status", callback_data="status")],
-        [InlineKeyboardButton("👥 Accounts Overview", callback_data="accounts"),
-         InlineKeyboardButton("❓ Help & Guide", callback_data="help")],
+        [InlineKeyboardButton("🎨 Generate", callback_data="gen")],
+        [InlineKeyboardButton("📋 Queue", callback_data="myqueue"),
+         InlineKeyboardButton("📊 Status", callback_data="status")],
+        [InlineKeyboardButton("👥 Accounts", callback_data="accounts"),
+         InlineKeyboardButton("❓ Help", callback_data="help")],
     ]
     return InlineKeyboardMarkup(kb)
 
 def admin_menu():
     kb = [
-        [InlineKeyboardButton("➕ Add New Account", callback_data="add_account")],
-        [InlineKeyboardButton("📦 Export Accounts", callback_data="export"),
-         InlineKeyboardButton("📥 Import Accounts", callback_data="import_prompt")],
-        [InlineKeyboardButton("🔄 Check Sessions", callback_data="check_sessions"),
-         InlineKeyboardButton("⏰ Reset Limits Now", callback_data="reset_limits")],
-        [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_main")],
+        [InlineKeyboardButton("➕ Add", callback_data="add_account")],
+        [InlineKeyboardButton("📦 Export", callback_data="export"),
+         InlineKeyboardButton("📥 Import", callback_data="import_prompt")],
+        [InlineKeyboardButton("🔄 Check", callback_data="check_sessions"),
+         InlineKeyboardButton("⏰ Reset", callback_data="reset_limits")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
     ]
     return InlineKeyboardMarkup(kb)
 
 def size_menu():
     kb = [
-        [InlineKeyboardButton("⬜ 1:1 Square", callback_data="size_1:1"),
-         InlineKeyboardButton("🖥️ 16:9 Wide", callback_data="size_16:9")],
-        [InlineKeyboardButton("📱 9:16 Portrait", callback_data="size_9:16"),
-         InlineKeyboardButton("📺 4:3 Standard", callback_data="size_4:3")],
-        [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_main")],
+        [InlineKeyboardButton("⬜ 1:1", callback_data="size_1:1"),
+         InlineKeyboardButton("🖥️ 16:9", callback_data="size_16:9")],
+        [InlineKeyboardButton("📱 9:16", callback_data="size_9:16"),
+         InlineKeyboardButton("📺 4:3", callback_data="size_4:3")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
     ]
     return InlineKeyboardMarkup(kb)
 
 def bulk_menu(prompt, image_size):
+    # Prompt stored in user_data, only send size+count in callback (64-byte Telegram limit)
     kb = [
-        [InlineKeyboardButton("1️⃣ Single Image", callback_data=f"bulk_{prompt[:50]}_{image_size}_1"),
-         InlineKeyboardButton("2️⃣ Double Pack", callback_data=f"bulk_{prompt[:50]}_{image_size}_2")],
-        [InlineKeyboardButton("4️⃣ Quad Pack", callback_data=f"bulk_{prompt[:50]}_{image_size}_4")],
+        [InlineKeyboardButton("1️⃣ Single Image", callback_data=f"b_{image_size}_1"),
+         InlineKeyboardButton("2️⃣ Double Pack", callback_data=f"b_{image_size}_2")],
+        [InlineKeyboardButton("4️⃣ Quad Pack", callback_data=f"b_{image_size}_4")],
         [InlineKeyboardButton("🔙 Back", callback_data="gen")],
     ]
     return InlineKeyboardMarkup(kb)
@@ -365,12 +366,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ── Bulk count selection ──
-    if data.startswith("bulk_"):
-        parts = data.split("_", 3)
-        if len(parts) >= 4:
-            prompt_trunc = parts[1]
-            image_size = parts[2]
-            bulk_count = int(parts[3])
+    if data.startswith("b_"):
+        parts = data.split("_")
+        if len(parts) >= 3:
+            image_size = parts[1]
+            bulk_count = int(parts[2])
         else:
             await query.edit_message_text(
                 box("❌ Error",
@@ -382,7 +382,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        prompt = ud.get("pending_prompt", prompt_trunc)
+        prompt = ud.get("pending_prompt", "")
+        if not prompt:
+            await query.edit_message_text(
+                box("❌ Prompt Lost",
+                    "━━ ❌ *Prompt Not Found* ━━\n\n"
+                    "   • Please send your prompt again\n"
+                    "   • Session data was cleared",
+                    emoji="❌"),
+                parse_mode="Markdown",
+                reply_markup=main_menu()
+            )
+            return
         ud["awaiting_bulk"] = False
         ud.pop("pending_prompt", None)
         ud.pop("pending_size", None)
@@ -722,6 +733,7 @@ async def process_queue():
             await asyncio.sleep(2)
 
 async def send_image_to_user(item, image_url, progress_msg=None):
+    import aiohttp
     from telegram import Bot
     bot = Bot(config.BOT_TOKEN)
     user_id = item["user_id"]
@@ -730,24 +742,25 @@ async def send_image_to_user(item, image_url, progress_msg=None):
     batch_total = item.get("batch_total", 1)
 
     try:
-        import requests
-        resp = requests.get(image_url, timeout=30)
-        if resp.status_code == 200:
-            bio = io.BytesIO(resp.content)
-            from utils.helpers import make_image_filename
-            bio.name = make_image_filename(prompt)
-            batch_tag = f" ({batch_idx+1}/{batch_total})" if batch_total > 1 else ""
-            caption = image_caption(prompt, batch_tag)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+                    bio = io.BytesIO(data)
+                    from utils.helpers import make_image_filename
+                    bio.name = make_image_filename(prompt)
+                    batch_tag = f" ({batch_idx+1}/{batch_total})" if batch_total > 1 else ""
+                    caption = image_caption(prompt, batch_tag)
 
-            await bot.send_photo(
-                chat_id=user_id, photo=bio, caption=caption, parse_mode="Markdown"
-            )
-            if progress_msg:
-                try:
-                    await progress_msg.delete()
-                except Exception:
-                    pass
-            return
+                    await bot.send_photo(
+                        chat_id=user_id, photo=bio, caption=caption, parse_mode="Markdown"
+                    )
+                    if progress_msg:
+                        try:
+                            await progress_msg.delete()
+                        except Exception:
+                            pass
+                    return
     except Exception as e:
         print(f"[bot] Send image error: {e}")
 
