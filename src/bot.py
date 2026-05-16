@@ -1,5 +1,6 @@
 import asyncio, io, json as jmod, re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
 from telegram.ext import (Application, CommandHandler, MessageHandler,
                           CallbackQueryHandler, filters, ContextTypes)
 
@@ -15,6 +16,15 @@ from ui import (box, error_box, menu_header, queue_box, progress_box,
                 image_caption, SEP, DIV, END)
 
 queue_semaphore = asyncio.Semaphore(1)
+
+async def safe_edit(msg, *args, **kwargs):
+    """Edit message, silently ignore 'Message is not modified' error."""
+    try:
+        return await msg.edit_text(*args, **kwargs)
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            return None
+        raise
 
 # ── Keyboards ──
 
@@ -323,7 +333,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 Queue.add(p, user_id, image_size=image_size, bulk_count=1)
                 count += 1
             ud.pop("pending_size", None)
-            await query.edit_message_text(
+            await safe_edit(query.message,
                 box("✅ Bulk Queued",
                     "━━ ✅ *Bulk Upload Successful* ━━\n\n"
                     f"   • 📥 Added `{count}` prompts from file\n"
@@ -341,7 +351,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if not prompt:
-            await query.edit_message_text(
+            await safe_edit(query.message,
                 box("❌ Error",
                     "━━ ❌ *No Prompt Found* ━━\n\n"
                     "   • 📝 Please send your text again\n"
@@ -353,7 +363,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         ud["awaiting_bulk"] = True
-        await query.edit_message_text(
+        await safe_edit(query.message,
             box("🔢 How Many Images?",
                 f"━━ 🔢 *Select Image Count* ━━\n\n"
                 f"   • ✏️ Prompt: `{prompt[:50]}`\n"
@@ -372,7 +382,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             image_size = parts[1]
             bulk_count = int(parts[2])
         else:
-            await query.edit_message_text(
+            await safe_edit(query.message,
                 box("❌ Error",
                     "━━ ❌ *Something went wrong* ━━\n\n"
                     "   • Please start again from /menu",
@@ -384,7 +394,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         prompt = ud.get("pending_prompt", "")
         if not prompt:
-            await query.edit_message_text(
+            await safe_edit(query.message,
                 box("❌ Prompt Lost",
                     "━━ ❌ *Prompt Not Found* ━━\n\n"
                     "   • Please send your prompt again\n"
@@ -402,7 +412,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending = Queue.get_pending_count()
 
         count_label = {1: "1️⃣ Single", 2: "2️⃣ Double", 4: "4️⃣ Quad"}.get(bulk_count, f"{bulk_count}x")
-        await query.edit_message_text(
+        await safe_edit(query.message,
             queued_box(prompt[:50], image_size, count_label, pending),
             parse_mode="Markdown",
             reply_markup=main_menu()
@@ -414,7 +424,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "gen":
         ud["awaiting_prompt"] = True
-        await query.edit_message_text(
+        await safe_edit(query.message,
             box("🎨 Generate Image",
                 "━━ 🎨 *Ready to Create!* ━━\n\n"
                 "   • 📝 Send me any text description\n"
@@ -435,7 +445,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "myqueue":
         items = Queue.get_user_queue(user_id)
         if not items:
-            await query.edit_message_text(
+            await safe_edit(query.message,
                 box("📋 Your Queue",
                     "━━ 📋 *Queue Status* ━━\n\n"
                     "   • ✅ Your queue is empty!\n"
@@ -468,7 +478,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             END,
             "_🤖 Powered by @TurabCoder_",
         ]
-        await query.edit_message_text("\n".join(lines), parse_mode="Markdown", reply_markup=main_menu())
+        await safe_edit(query.message,"\n".join(lines), parse_mode="Markdown", reply_markup=main_menu())
         return
 
     if data == "status":
@@ -478,13 +488,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = status_box(ac, qs['pending'], qs.get('processing',0), qs['done'], qs['fail'], ses)
         kb = [[InlineKeyboardButton("🔄 Refresh Status", callback_data="status"),
                InlineKeyboardButton("🔙 Back to Menu", callback_data="back_main")]]
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
+        await safe_edit(query.message,text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
         return
 
     if data == "accounts":
         docs = Account.get_all()
         if not docs:
-            await query.edit_message_text(
+            await safe_edit(query.message,
                 accounts_box([]),
                 parse_mode="Markdown",
                 reply_markup=main_menu()
@@ -499,11 +509,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(f"   • {src}{exp} `{name}` ({c} cookies)")
         if len(docs) > 10:
             lines.append(f"\n   • ...and {len(docs)-10} more")
-        await query.edit_message_text(accounts_box(lines), parse_mode="Markdown", reply_markup=main_menu())
+        await safe_edit(query.message,accounts_box(lines), parse_mode="Markdown", reply_markup=main_menu())
         return
 
     if data == "help":
-        await query.edit_message_text(help_box(), parse_mode="Markdown", reply_markup=main_menu())
+        await safe_edit(query.message,help_box(), parse_mode="Markdown", reply_markup=main_menu())
         return
 
     # ── Admin ──
@@ -526,13 +536,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━━\n"
             "─────────────────────"
         )
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=admin_menu())
+        await safe_edit(query.message,text, parse_mode="Markdown", reply_markup=admin_menu())
         return
 
     if data == "export" and is_adm:
         data_list = export_accounts()
         if not data_list:
-            await query.edit_message_text(
+            await safe_edit(query.message,
                 box("📦 Export",
                     "━━ 📭 *Nothing to Export* ━━\n\n"
                     "   • 📦 No accounts found in database\n"
@@ -546,7 +556,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bio = io.BytesIO(jmod.dumps(data_list, indent=2, default=str).encode())
         bio.name = "gpt-accounts.json"
         await query.message.reply_document(bio, caption="📦 GPT Accounts Export — @TurabCoder")
-        await query.edit_message_text(
+        await safe_edit(query.message,
             box("📦 Export Complete",
                 "━━ ✅ *Export Successful* ━━\n\n"
                 f"   • 📄 File: `gpt-accounts.json`\n"
@@ -564,7 +574,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "import_prompt" and is_adm:
         context.user_data["awaiting_import"] = True
-        await query.edit_message_text(
+        await safe_edit(query.message,
             box("📥 Import",
                 "━━ 📥 *Import Accounts* ━━\n\n"
                 "   • 📁 Send a `.json` file to import\n"
@@ -599,11 +609,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━━\n"
             "─────────────────────"
         )
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=admin_menu())
+        await safe_edit(query.message,text, parse_mode="Markdown", reply_markup=admin_menu())
         return
 
     if data == "check_sessions" and is_adm:
-        await query.edit_message_text(
+        await safe_edit(query.message,
             box("🔄 Sessions",
                 "━━ 🔄 *Checking All Sessions* ━━\n\n"
                 "   • 🔍 Validating account cookies...\n"
@@ -634,7 +644,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             END,
             "_🤖 Powered by @TurabCoder_",
         ]
-        await query.edit_message_text(
+        await safe_edit(query.message,
             "\n".join(lines), parse_mode="Markdown", reply_markup=admin_menu()
         )
         return
@@ -660,11 +670,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             END,
             "_🤖 Powered by @TurabCoder_",
         ]
-        await query.edit_message_text("\n".join(lines), parse_mode="Markdown", reply_markup=admin_menu())
+        await safe_edit(query.message,"\n".join(lines), parse_mode="Markdown", reply_markup=admin_menu())
         return
 
     if data == "back_main":
-        await query.edit_message_text(menu_header(), parse_mode="Markdown", reply_markup=main_menu())
+        await safe_edit(query.message,menu_header(), parse_mode="Markdown", reply_markup=main_menu())
         return
 
 # ── Queue Processor ──

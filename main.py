@@ -35,6 +35,10 @@ async def lifespan(app: FastAPI):
     await telegram_app.start()
     await telegram_app.updater.start_polling()
 
+    acct_count = Account.count()
+    queue_count = Queue.get_pending_count()
+    print(f"[main] Bot started — {acct_count} accounts, {queue_count} queued items")
+
     session_task = asyncio.create_task(session_check_loop())
     limit_task = asyncio.create_task(limit_reset_loop())
 
@@ -152,6 +156,7 @@ async def receive_cookies(request: Request):
     client_ip = request.client.host if request.client else "unknown"
     label = body.get("label", f"ext-{client_ip}-{len(cookies)}ck")
     profile_name = body.get("profile_name", label)
+    print(f"[api] Cookies received: label={label} count={len(cookies)} ip={client_ip}")
 
     existing = accounts_col.find_one({"label": label})
     if existing:

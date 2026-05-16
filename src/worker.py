@@ -171,6 +171,9 @@ async def dismiss_popups(page):
             pass
 
 async def login(account, cb=None):
+    label = account.get("label", "?")
+    print(f"[worker] Login attempt: {label}")
+
     ctx = await new_context(account["cookies"])
     p = await ctx.new_page()
 
@@ -180,16 +183,23 @@ async def login(account, cb=None):
     try:
         await p.goto(CHATGPT_URL, wait_until="networkidle", timeout=45000)
     except PwTimeout:
+        print(f"[worker] TIMEOUT navigating to {CHATGPT_URL}")
         await ctx.close()
         return None, None
 
     await asyncio.sleep(5)  # Cloudflare challenge time
     await dismiss_popups(p)
 
-    if LOGIN_URL in p.url:
+    current_url = p.url
+    print(f"[worker] After nav, URL = {current_url}")
+
+    if LOGIN_URL in current_url:
+        print(f"[worker] SESSION EXPIRED for {label} — redirected to login page")
         mark_expired(account["_id"])
         await ctx.close()
         return None, None
+
+    print(f"[worker] Login OK for {label}")
 
     if cb:
         await cb("📍 Opening Images page...")
@@ -202,6 +212,7 @@ async def login(account, cb=None):
     name = await capture_profile_name(p)
     if name:
         update_profile_name(account["_id"], name)
+        print(f"[worker] Profile name: {name}")
 
     return p, ctx
 
@@ -248,9 +259,11 @@ def display_name(account):
 
 async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=None):
   async with worker_lock:
+    print(f"[worker] submit_prompt called: '{prompt[:50]}...' size={image_size} retry={retry}")
     for attempt in range(retry):
         account = get_next_account()
         if not account:
+            print("[worker] NO ACCOUNTS available in DB")
             if progress_callback:
                 await progress_callback("❌ No valid accounts available")
             return {"success": False, "error": "No valid accounts"}
@@ -324,12 +337,14 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
 
             if image_url:
                 mark_success(account["_id"])
+                print(f"[worker] IMAGE GENERATED on {name}: {image_url[:80]}...")
                 await ctx.close()
                 if progress_callback:
                     await progress_callback(f"✅ Done on `{name}`")
                 return {"success": True, "image_url": image_url, "account": name}
 
             body = await p.text_content("body") or ""
+            print(f"[worker] No image found. Body snippet: {body[:200]}")
 
             reset_at = parse_limit_reset_time(body)
             if reset_at:
@@ -383,9 +398,12 @@ async def wait_for_image(p, timeout=180000):
 async def check_session():
   async with worker_lock:
     docs = Account.get_all()
+    print(f"[worker] check_session: {len(docs)} accounts to verify")
     expired = []
     for d in docs:
+        label = d.get("label", "?")
         if d.get("expired"):
+            print(f"[worker] check_session: {label} already expired, skipping")
             expired.append(d)
             continue
         ctx = None
@@ -396,13 +414,18 @@ async def check_session():
             await p.goto(CHATGPT_URL, wait_until="networkidle", timeout=45000)
             await asyncio.sleep(5)
             if LOGIN_URL in p.url:
+                print(f"[worker] check_session: {label} EXPIRED — redirected to login")
                 mark_expired(d["_id"])
                 expired.append(d)
+            else:
+                print(f"[worker] check_session: {label} OK")
             await ctx.close()
-        except Exception:
+        except Exception as e:
+            print(f"[worker] check_session: {label} ERROR — {e}")
             if ctx:
                 try:
                     await ctx.close()
                 except:
                     pass
+    print(f"[worker] check_session done: {len(expired)} expired")
     return expired
