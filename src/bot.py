@@ -11,7 +11,7 @@ import config
 from db import init_db
 from models import Account, Queue
 from accounts.manager import (is_admin, export_accounts, import_accounts,
-                              get_session_status, mark_expired)
+                              get_session_status, mark_expired, add_manual_account)
 from worker import submit_prompt, close as close_worker, check_session
 from ui import (box, error_box, menu_header, queue_box, progress_box,
                 result_box, status_box, accounts_box, queued_box, help_box,
@@ -33,8 +33,9 @@ def main_menu():
 
 def admin_menu():
     kb = [
-        [InlineKeyboardButton("📦 Export Accounts", callback_data="export")],
-        [InlineKeyboardButton("📥 Import Accounts", callback_data="import_prompt")],
+        [InlineKeyboardButton("➕ Add Account", callback_data="add_account")],
+        [InlineKeyboardButton("📦 Export", callback_data="export"),
+         InlineKeyboardButton("📥 Import", callback_data="import_prompt")],
         [InlineKeyboardButton("🔄 Check Sessions", callback_data="check_sessions")],
         [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
     ]
@@ -85,6 +86,30 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             box("Import", "Please send a .json file for import."),
             parse_mode="Markdown"
         )
+        return
+
+    if ud.get("awaiting_account_json"):
+        if " | " in txt:
+            label, cookies_str = txt.split(" | ", 1)
+            label = label.strip()
+        else:
+            label = None
+            cookies_str = txt
+        ok, msg = add_manual_account(cookies_str, label)
+        if ok:
+            ud["awaiting_account_json"] = False
+            await update.message.reply_text(
+                box("Account Added", f"✅ {msg}", emoji="➕"),
+                parse_mode="Markdown",
+                reply_markup=main_menu()
+            )
+        else:
+            await update.message.reply_text(
+                error_box("Add Failed", msg,
+                          reasons=["Invalid JSON", "Missing cookies"],
+                          tips=["Copy from extension export", "Check format"]),
+                parse_mode="Markdown"
+            )
         return
 
     if ud.get("awaiting_size"):
@@ -395,6 +420,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["awaiting_import"] = True
         await query.edit_message_text(
             box("Import", "Send me the .json accounts file.", emoji="📥"),
+            parse_mode="Markdown",
+            reply_markup=admin_menu()
+        )
+        return
+
+    if data == "add_account" and is_adm:
+        context.user_data["awaiting_account_json"] = True
+        await query.edit_message_text(
+            box("Add Account",
+                "Paste cookies JSON array from extension.\n\n"
+                "Format: `[{\"name\":\"...\",\"value\":\"...\",...}]`\n\n"
+                "Or send a label first, then cookies: `LabelName | [{\"name\"...}]`",
+                emoji="➕"),
             parse_mode="Markdown",
             reply_markup=admin_menu()
         )
