@@ -1,19 +1,17 @@
 import asyncio, traceback
+from datetime import datetime, timezone
 from playwright.async_api import async_playwright, TimeoutError as PwTimeout
 
 import config
 from models import Account
-from accounts.manager import get_next_account, mark_success, mark_error, mark_expired
+from accounts.manager import (
+    get_next_account, mark_success, mark_error, mark_expired,
+    mark_limited, update_profile_name, parse_limit_reset_time,
+)
 
 CHATGPT_URL = "https://chatgpt.com"
 IMAGES_URL = "https://chatgpt.com/images"
 LOGIN_URL = "https://chatgpt.com/auth/login"
-
-UPGRADE_PATTERNS = [
-    "upgrade", "subscription", "limit reached", "too many",
-    "rate limit", "try again later", "429", "please upgrade",
-    "you've reached the limit", "billing",
-]
 
 _browser = None
 
@@ -49,6 +47,35 @@ async def new_context(cookies):
         await ctx.add_cookies(cookies)
     return ctx
 
+async def capture_profile_name(p):
+    NAME_SELECTORS = [
+        '[data-testid="user-avatar"] img[alt]',
+        '[data-testid="profile-name"]',
+        'nav button span.truncate',
+        'nav button div.truncate',
+        '[data-testid="user-menu"] span',
+        'header button span.truncate',
+        'nav a div.truncate',
+    ]
+    body = await p.text_content("body") or ""
+    for sel in NAME_SELECTORS:
+        try:
+            el = await p.query_selector(sel)
+            if el:
+                txt = (await el.text_content() or "").strip()
+                if txt:
+                    return txt
+        except:
+            pass
+    import re as _re
+    m = _re.search(r'"user_name"\s*:\s*"([^"]+)"', body)
+    if m:
+        return m.group(1)
+    m = _re.search(r'"name"\s*:\s*"([^"]+)"', body)
+    if m:
+        return m.group(1)
+    return None
+
 async def login(account, cb=None):
     ctx = await new_context(account["cookies"])
     p = await ctx.new_page()
@@ -72,6 +99,10 @@ async def login(account, cb=None):
     except:
         pass
     await asyncio.sleep(5)
+
+    name = await capture_profile_name(p)
+    if name:
+        update_profile_name(account["_id"], name)
 
     return p, ctx
 
@@ -121,12 +152,8 @@ async def find_visible(page, selectors, timeout=10000):
     except:
         return None
 
-def is_upgrade(body):
-    b = body.lower()
-    for pat in UPGRADE_PATTERNS:
-        if pat in b:
-            return True
-    return False
+def display_name(account):
+    return account.get("profile_name") or account.get("label", "Account")
 
 async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=None):
     for attempt in range(retry):
@@ -136,8 +163,10 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                 await progress_callback("❌ No valid accounts available")
             return {"success": False, "error": "No valid accounts"}
 
+        name = display_name(account)
+
         if progress_callback:
-            await progress_callback(f"🔄 Attempt {attempt+1} — `{account.get('label', 'Account')}`")
+            await progress_callback(f"🔄 Attempt {attempt+1} — `{name}`")
 
         p, ctx = await login(account, cb=progress_callback)
         if p is None:
@@ -147,7 +176,7 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
             continue
 
         if progress_callback:
-            await progress_callback(f"✅ Logged in as `{account.get('label', 'Account')}`")
+            await progress_callback(f"✅ Logged in as `{name}`")
 
         for dismiss_sel in [
             'button:has-text("Stay logged out")',
@@ -195,16 +224,20 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                 mark_success(account["_id"])
                 await ctx.close()
                 if progress_callback:
-                    await progress_callback(f"✅ Done on `{account.get('label', 'Account')}`")
-                return {"success": True, "image_url": image_url, "account": account.get("label")}
+                    await progress_callback(f"✅ Done on `{name}`")
+                return {"success": True, "image_url": image_url, "account": name}
 
             body = await p.text_content("body") or ""
 
-            if is_upgrade(body):
-                mark_error(account["_id"])
+            reset_at = parse_limit_reset_time(body)
+            if reset_at:
+                mark_limited(account["_id"], reset_at)
                 await ctx.close()
+                left = (reset_at - datetime.now(timezone.utc)).total_seconds()
+                h = int(left // 3600)
+                m = int((left % 3600) // 60)
                 if progress_callback:
-                    await progress_callback("⬆️ Upgrade limit hit, rotating account...")
+                    await progress_callback(f"⏳ `{name}` limit — resets in {h}h {m}m, rotating...")
                 continue
 
             await p.screenshot(path="/tmp/worker-no-image.png")
@@ -236,7 +269,7 @@ async def wait_for_image(p, timeout=180000):
         if img:
             return await img.get_attribute("src")
         body = await p.text_content("body") or ""
-        if is_upgrade(body):
+        if parse_limit_reset_time(body):
             return None
         stop_btn = await find_visible(p, STOP_SELECTORS, timeout=3000)
         if not stop_btn:

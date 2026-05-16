@@ -10,10 +10,12 @@ from db import init_db, queue_col, accounts_col
 from models import Queue, Account
 from bot import (start, menu_command, gen_command, button_handler,
                  handle_text, handle_file, process_queue)
+from accounts.manager import reset_limited_accounts
 
 telegram_app = None
-API_KEY = os.getenv("API_KEY", "")  # Optional: authenticate cookie pushes
-SESSION_CHECK_INTERVAL = int(os.getenv("SESSION_CHECK_INTERVAL", "30"))  # minutes
+API_KEY = os.getenv("API_KEY", "")
+SESSION_CHECK_INTERVAL = int(os.getenv("SESSION_CHECK_INTERVAL", "30"))
+LIMIT_RESET_INTERVAL = int(os.getenv("LIMIT_RESET_INTERVAL", "5"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -32,18 +34,41 @@ async def lifespan(app: FastAPI):
     await telegram_app.start()
     await telegram_app.updater.start_polling()
 
-    # Auto session check every N minutes
     session_task = asyncio.create_task(session_check_loop())
+    limit_task = asyncio.create_task(limit_reset_loop())
+
+    try:
+        text = (
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "🤖 *GPT Image Bot*\n"
+            "━━━━━━━━━━━━━━━━━━━\n\n"
+            "🟢 **Bot Restarted Successfully**\n\n"
+            "📋 Status:\n"
+            f"• 👤 Accounts: {Account.count()}\n"
+            f"• ⏳ Queue pending: {Queue.get_pending_count()}\n"
+            "• 🔄 Session check: Every 30m\n"
+            "• ⏰ Limit auto-reset: Every 5m\n\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "⚙️ *All systems operational*\n"
+            "─────────────────────"
+        )
+        for uid in config.ADMIN_IDS:
+            try:
+                await telegram_app.bot.send_message(chat_id=uid, text=text, parse_mode="Markdown")
+            except:
+                pass
+    except:
+        pass
 
     yield
 
+    limit_task.cancel()
     session_task.cancel()
     await telegram_app.updater.stop()
     await telegram_app.stop()
     await telegram_app.shutdown()
 
 async def session_check_loop():
-    """Check all account sessions every SESSION_CHECK_INTERVAL minutes."""
     while True:
         try:
             await asyncio.sleep(SESSION_CHECK_INTERVAL * 60)
@@ -51,7 +76,7 @@ async def session_check_loop():
             expired = await check_session()
             if expired and telegram_app:
                 for acct in expired:
-                    label = acct.get("label", "Unknown")
+                    label = acct.get("profile_name") or acct.get("label", "Unknown")
                     msg = f"⚠️ Session expired: `{label}`\nRe-capture cookies from extension."
                     for uid in config.ADMIN_IDS:
                         try:
@@ -64,9 +89,34 @@ async def session_check_loop():
             print(f"[session_check] Error: {e}")
             await asyncio.sleep(60)
 
-app = FastAPI(lifespan=lifespan, title="GPT Image Bot", docs_url=None, redoc_url=None)
+async def limit_reset_loop():
+    while True:
+        try:
+            await asyncio.sleep(LIMIT_RESET_INTERVAL * 60)
+            n = reset_limited_accounts()
+            if n > 0 and telegram_app:
+                text = (
+                    "━━━━━━━━━━━━━━━━━━━\n"
+                    "🔄 *Limit Reset* ── *Auto* ── *Active*\n"
+                    "━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"✅ **{n} account(s) restored!**\n"
+                    "⏰ Their limit has expired.\n"
+                    "📥 Ready for image generation.\n\n"
+                    "━━━━━━━━━━━━━━━━━━━\n"
+                    "─────────────────────"
+                )
+                for uid in config.ADMIN_IDS:
+                    try:
+                        await telegram_app.bot.send_message(chat_id=uid, text=text, parse_mode="Markdown")
+                    except:
+                        pass
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"[limit_reset] Error: {e}")
+            await asyncio.sleep(60)
 
-# ── Health ──
+app = FastAPI(lifespan=lifespan, title="GPT Image Bot", docs_url=None, redoc_url=None)
 
 @app.get("/")
 async def root():
@@ -86,15 +136,8 @@ async def api_generate(prompt: str = "", image_size: str = "1:1"):
     result = await submit_prompt(prompt, image_size)
     return result
 
-# ── Cookie Capture from Chrome Extension ──
-
 @app.post("/api/cookies")
 async def receive_cookies(request: Request):
-    """
-    Chrome extension POSTs captured cookies here.
-    Body: { "cookies": [...], "label": "optional-label" }
-    Header: X-API-Key (optional, for security)
-    """
     if API_KEY:
         key = request.headers.get("X-API-Key", "")
         if not hmac.compare_digest(key, API_KEY):
@@ -107,8 +150,8 @@ async def receive_cookies(request: Request):
 
     client_ip = request.client.host if request.client else "unknown"
     label = body.get("label", f"ext-{client_ip}-{len(cookies)}ck")
+    profile_name = body.get("profile_name", label)
 
-    # Avoid duplicates — same label = update
     existing = accounts_col.find_one({"label": label})
     if existing:
         accounts_col.update_one(
@@ -116,17 +159,19 @@ async def receive_cookies(request: Request):
             {"$set": {
                 "cookies": cookies,
                 "source": "extension",
+                "profile_name": profile_name,
                 "last_updated": datetime.now(timezone.utc),
                 "expired": False,
+                "limited": False,
+                "limit_reset_at": None,
                 "error_count": 0
             }}
         )
         return {"success": True, "action": "updated", "label": label}
 
     Account.create(label, cookies, source="extension")
+    accounts_col.update_one({"label": label}, {"$set": {"profile_name": profile_name}})
     return {"success": True, "action": "created", "label": label}
-
-# ── List endpoints ──
 
 @app.get("/api/accounts")
 async def list_accounts():
@@ -135,8 +180,11 @@ async def list_accounts():
         {
             "id": str(d["_id"]),
             "label": d.get("label", "?"),
+            "profile_name": d.get("profile_name", d.get("label", "?")),
             "source": d.get("source", "manual"),
             "expired": d.get("expired", False),
+            "limited": d.get("limited", False),
+            "limit_reset_at": str(d.get("limit_reset_at", "")) if d.get("limit_reset_at") else None,
             "error_count": d.get("error_count", 0),
             "created_at": str(d.get("created_at", "")),
         }
@@ -145,12 +193,11 @@ async def list_accounts():
 
 @app.get("/api/accounts/<label>/refresh")
 async def refresh_cookies(label: str):
-    """Mark account as un-expired so worker re-tries it."""
     doc = accounts_col.find_one({"label": label})
     if not doc:
         raise HTTPException(404, "Account not found")
     accounts_col.update_one(
         {"_id": doc["_id"]},
-        {"$set": {"expired": False, "error_count": 0}}
+        {"$set": {"expired": False, "limited": False, "limit_reset_at": None, "error_count": 0}}
     )
     return {"success": True}

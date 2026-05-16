@@ -6,9 +6,12 @@ class Account:
     def create(label, cookies, source="manual"):
         return accounts_col.insert_one({
             "label": label,
+            "profile_name": label,
             "cookies": cookies,
             "source": source,
             "active": False,
+            "limited": False,
+            "limit_reset_at": None,
             "created_at": datetime.now(timezone.utc),
             "last_used": None,
             "error_count": 0,

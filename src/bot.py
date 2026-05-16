@@ -11,11 +11,12 @@ import config
 from db import init_db
 from models import Account, Queue
 from accounts.manager import (is_admin, export_accounts, import_accounts,
-                              get_session_status, mark_expired, add_manual_account)
+                              get_session_status, mark_expired, add_manual_account,
+                              reset_limited_accounts, parse_limit_reset_time)
 from worker import submit_prompt, close as close_worker, check_session
 from ui import (box, error_box, menu_header, queue_box, progress_box,
                 result_box, status_box, accounts_box, queued_box, help_box,
-                image_caption, SEP, END)
+                image_caption, SEP, DIV, END)
 
 queue_semaphore = asyncio.Semaphore(1)
 
@@ -36,7 +37,8 @@ def admin_menu():
         [InlineKeyboardButton("➕ Add Account", callback_data="add_account")],
         [InlineKeyboardButton("📦 Export", callback_data="export"),
          InlineKeyboardButton("📥 Import", callback_data="import_prompt")],
-        [InlineKeyboardButton("🔄 Check Sessions", callback_data="check_sessions")],
+        [InlineKeyboardButton("🔄 Check Sessions", callback_data="check_sessions"),
+         InlineKeyboardButton("⏰ Reset Limits", callback_data="reset_limits")],
         [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
     ]
     return InlineKeyboardMarkup(kb)
@@ -63,12 +65,26 @@ def bulk_menu(prompt, image_size):
 # ── Handlers ──
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = box(
-        "GPT Image Bot",
-        "Simply send any text — I'll auto-generate an image!\n"
-        "Or use the menu below for more options.\n\n"
-        "Upload .txt file for bulk prompts.",
-        emoji="🤖"
+    text = (
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "🤖 *🎨 Welcome to GPT Image Bot!* 🎨\n"
+        "─────────────────────\n\n"
+        "━━ 🚀 *How It Works* ━━\n"
+        "   • 📝 Send any text → AI generates image\n"
+        "   • 📁 Upload `.txt` file → Bulk processing\n"
+        "   • 🖼️ Images delivered right in this chat\n"
+        "   • 🔄 Multi-account auto-failover\n\n"
+        "━━ 📋 *Quick Start* ━━\n"
+        "   • ✏️ Just type what you want to see\n"
+        "   • 📐 Choose aspect ratio when prompted\n"
+        "   • 🔢 Select count (1 / 2 / 4 images)\n"
+        "   • ✅ Done! Image will appear here\n\n"
+        "━━ 💡 *Tips* ━━\n"
+        "   • 🎨 Be descriptive for best results\n"
+        "   • 📄 Separate prompts by blank line in `.txt`\n"
+        "   • 📊 Use /menu for full options\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "─────────────────────"
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=main_menu())
 
@@ -99,15 +115,24 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if ok:
             ud["awaiting_account_json"] = False
             await update.message.reply_text(
-                box("Account Added", f"✅ {msg}", emoji="➕"),
+                box("Account Added",
+                    "━━ ✅ *Successfully Added* ━━\n\n"
+                    f"   • 📝 `{msg}`\n"
+                    f"   • 🔄 Ready for image generation\n"
+                    f"   • 🔐 Cookies stored securely",
+                    emoji="➕"),
                 parse_mode="Markdown",
                 reply_markup=main_menu()
             )
         else:
             await update.message.reply_text(
-                error_box("Add Failed", msg,
-                          reasons=["Invalid JSON", "Missing cookies"],
-                          tips=["Copy from extension export", "Check format"]),
+                error_box("😵‍💫 Account Add Failed!", msg,
+                          reasons=["❌ Invalid JSON format detected",
+                                   "🍪 Missing or malformed cookies array",
+                                   "📋 Copy from extension export for correct format"],
+                          tips=["📋 Export existing account to see correct format",
+                                 "📸 Capture fresh cookies from chatgpt.com",
+                                 "📬 Contact @TurabCoder if problem persists"]),
                 parse_mode="Markdown"
             )
         return
@@ -181,11 +206,16 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             data = jmod.loads(content)
             count = import_accounts(data)
-            await update.message.reply_text(
-                box("Import", f"✅ Imported {count} accounts successfully.", emoji="📥"),
-                parse_mode="Markdown",
-                reply_markup=main_menu()
-            )
+    await update.message.reply_text(
+        box("Import",
+            "━━ ✅ *Import Successful* ━━\n\n"
+            f"   • 📥 Imported `{count}` account(s)\n"
+            f"   • 🔄 Ready for image generation\n"
+            f"   • 🏷️ Duplicates auto-renamed with suffix",
+            emoji="📥"),
+        parse_mode="Markdown",
+        reply_markup=main_menu()
+    )
         except Exception as e:
             await update.message.reply_text(
                 error_box("Import Failed", str(e)[:100],
@@ -201,7 +231,15 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompts = [p.strip() for p in re.split(r'\n\s*\n', content) if p.strip()]
         if not prompts:
             await update.message.reply_text(
-                box("No Prompts", "No prompts found in file.\nSeparate prompts by blank line."),
+                box("No Prompts Found",
+                    "━━ 📭 *Empty File* ━━\n\n"
+                    "   • 📄 No prompts detected in your file\n"
+                    "   • 📝 Separate each prompt by a blank line\n"
+                    "   • ✅ Example:\n"
+                    "      `a cat`\n"
+                    "      `(blank line)`\n"
+                    "      `a dog`",
+                    emoji="📭"),
                 parse_mode="Markdown"
             )
             return
@@ -254,9 +292,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(
                 box(
                     "Bulk Queued",
-                    f"📥 Added **{count}** prompts from file!\n"
-                    f"📐 Size: {image_size}\n"
-                    f"⏳ Position: #{Queue.get_pending_count()}",
+                    "━━ ✅ *Bulk Upload Successful* ━━\n\n"
+                    f"   • 📥 Added `{count}` prompts from file\n"
+                    f"   • 📐 Size: `{image_size}`\n"
+                    f"   • 🎯 Position: `#{Queue.get_pending_count()}`\n\n"
+                    "━━ ⏰ *Next Steps* ━━\n"
+                    "   • 🔄 Processing in background\n"
+                    "   • 📬 Each image sent here as ready\n"
+                    "   • 📊 Check `/menu` for status",
                     emoji="✅"
                 ),
                 parse_mode="Markdown",
@@ -374,10 +417,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines = []
         for i, d in enumerate(docs[:10]):
             c = len(d.get("cookies", []))
-            l = d.get("label", f"#{i+1}")
-            exp = "❌" if d.get("expired") else "✅"
+            name = d.get("profile_name") or d.get("label", f"#{i+1}")
+            exp = "❌" if d.get("expired") else ("⏳" if d.get("limited") else "✅")
             src = "🌐" if d.get("source") == "extension" else "📦"
-            lines.append(f"{src}{exp} {i+1}. `{l}` ({c}ck)")
+            lines.append(f"{src}{exp} {i+1}. `{name}` ({c}ck)")
         if len(docs) > 10:
             lines.append(f"\n...and {len(docs)-10} more")
         await query.edit_message_text(accounts_box(lines), parse_mode="Markdown", reply_markup=main_menu())
@@ -390,27 +433,54 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Admin ──
 
     if data == "admin" and is_adm:
-        await query.edit_message_text(
-            box("Admin Panel", "Manage accounts & sessions.", emoji="⚙️"),
-            parse_mode="Markdown",
-            reply_markup=admin_menu()
+        text = (
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "⚙️ *🛠️ Admin Control Panel* ⚙️\n"
+            "─────────────────────\n\n"
+            "👋 *Welcome, Admin!*\n\n"
+            "━━ 📋 *Available Actions* ━━\n"
+            "   • ➕ *Add Account* — Paste cookies JSON\n"
+            "   • 📦 *Export* — Download all accounts\n"
+            "   • 📥 *Import* — Upload accounts JSON\n"
+            "   • 🔄 *Check Sessions* — Validate & reset\n\n"
+            "━━ 📌 *Tips* ━━\n"
+            "   • Accounts auto-rotate on limits\n"
+            "   • Limits auto-reset every 5 minutes\n"
+            "   • Expired sessions notify you instantly\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "─────────────────────"
         )
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=admin_menu())
         return
 
     if data == "export" and is_adm:
         data_list = export_accounts()
         if not data_list:
             await query.edit_message_text(
-                box("Export", "Nothing to export.", emoji="📦"),
+                box("Export",
+                    "━━ 📭 *Nothing to Export* ━━\n\n"
+                    "   • 📦 No accounts found in database\n"
+                    "   • ➕ Add accounts first via Admin panel\n"
+                    "   • 🌐 Or sync via Chrome extension",
+                    emoji="📦"),
                 parse_mode="Markdown",
                 reply_markup=admin_menu()
             )
             return
         bio = io.BytesIO(jmod.dumps(data_list, indent=2, default=str).encode())
         bio.name = "gpt-accounts.json"
-        await query.message.reply_document(bio, caption="📦 Accounts export")
+        await query.message.reply_document(bio, caption="📦 GPT Accounts Export — @TurabCoder")
         await query.edit_message_text(
-            box("Export", "✅ Accounts exported successfully!", emoji="📦"),
+            box("Export",
+                "━━ ✅ *Export Successful* ━━\n\n"
+                f"   • 📄 File: `gpt-accounts.json`\n"
+                f"   • 👤 Accounts: {len(data_list)}\n"
+                f"   • 🔐 Data: Cookies (Keep Private!)\n\n"
+                f"━━ ⚠️ *Security Warning* ━━\n"
+                f"   • 🔒 Keep this file secure!\n"
+                f"   • 🚫 Never share with anyone\n"
+                f"   • 🗑️ Delete after use if possible",
+                emoji="📦"),
             parse_mode="Markdown",
             reply_markup=admin_menu()
         )
@@ -419,7 +489,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "import_prompt" and is_adm:
         context.user_data["awaiting_import"] = True
         await query.edit_message_text(
-            box("Import", "Send me the .json accounts file.", emoji="📥"),
+            box("Import",
+                "━━ 📥 *Import Accounts* ━━\n\n"
+                "   • 📁 Send a `.json` file to import\n"
+                "   • 📋 Format: Export format only\n"
+                "   • 🔄 Duplicates will be auto-renamed\n\n"
+                "━━ ⚠️ *Note* ━━\n"
+                "   • Existing labels get `-N` suffix\n"
+                "   • Invalid entries are skipped",
+                emoji="📥"),
             parse_mode="Markdown",
             reply_markup=admin_menu()
         )
@@ -427,31 +505,72 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "add_account" and is_adm:
         context.user_data["awaiting_account_json"] = True
-        await query.edit_message_text(
-            box("Add Account",
-                "Paste cookies JSON array from extension.\n\n"
-                "Format: `[{\"name\":\"...\",\"value\":\"...\",...}]`\n\n"
-                "Or send a label first, then cookies: `LabelName | [{\"name\"...}]`",
-                emoji="➕"),
-            parse_mode="Markdown",
-            reply_markup=admin_menu()
+        text = (
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "➕ *📥 Add New Account* ➕\n"
+            "─────────────────────\n\n"
+            "━━ 📋 *Instructions* ━━\n\n"
+            "   • 📋 Paste cookies JSON array from Chrome extension\n"
+            "   • 📝 Format: `[{\"name\":\"...\",\"value\":\"...\",...}]`\n\n"
+            "━━ 🔖 *Optional: Custom Label* ━━\n\n"
+            "   • Send label first, then cookies:\n"
+            "   • `MyAccountName | [{\"name\"...}]`\n\n"
+            "━━ ⚠️ *Important* ━━\n"
+            "   • 🔐 Keep cookies private & secure\n"
+            "   • 🔄 Same label = auto-update\n"
+            "   • ❌ Invalid JSON will be rejected\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "─────────────────────"
         )
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=admin_menu())
         return
 
     if data == "check_sessions" and is_adm:
         await query.edit_message_text(
-            box("Sessions", "🔄 Checking sessions...", emoji="🔄"),
+            box("Sessions", "🔄 Checking sessions & resetting limits...", emoji="🔄"),
             parse_mode="Markdown"
         )
         await check_session()
+        n = reset_limited_accounts()
         ses = get_session_status()
-        lines = [SEP, "✅ *Session Check Complete*", ""]
+        lines = [
+            SEP,
+            "✅ *✅ Session Check Complete* ✅",
+            DIV,
+            f"🔄 *Limits Reset:* {n} account(s) restored",
+            "",
+            "━━ 📋 *Account Status Report* ━━",
+        ]
         for s in ses:
-            lines.append(f"• {s}")
-        lines += [END]
+            lines.append(f"   • {s}")
+        lines += [
+            "",
+            SEP,
+            "━━ 📌 *Legend* ━━",
+            "   ✅ Active    ❌ Expired    ⏳ Limited    ⚠️ Errors",
+            END,
+            "_🤖 Powered by @TurabCoder_",
+        ]
         await query.edit_message_text(
             "\n".join(lines), parse_mode="Markdown", reply_markup=admin_menu()
         )
+        return
+
+    if data == "reset_limits" and is_adm:
+        n = reset_limited_accounts()
+        ses = get_session_status()
+        lines = [
+            SEP,
+            "⏰ *🔄 Limit Reset Complete* 🔄",
+            DIV,
+            f"🔄 *Restored:* {n} account(s)",
+            "",
+            "━━ 📋 *Current Status* ━━",
+        ]
+        for s in ses:
+            lines.append(f"   • {s}")
+        lines += [SEP, END, "_🤖 Powered by @TurabCoder_"]
+        await query.edit_message_text("\n".join(lines), parse_mode="Markdown", reply_markup=admin_menu())
         return
 
     if data == "back_main":
