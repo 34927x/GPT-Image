@@ -12,6 +12,7 @@ from models import Queue, Account
 from bot import (start, menu_command, gen_command, button_handler,
                  handle_text, handle_file, process_queue, status_command)
 from accounts.manager import reset_limited_accounts
+from ui import SEP, center
 
 telegram_app = None
 API_KEY = os.getenv("API_KEY", "")
@@ -34,6 +35,7 @@ async def lifespan(app: FastAPI):
 
     await telegram_app.initialize()
     await telegram_app.start()
+    await telegram_app.bot.delete_webhook(drop_pending_updates=True)
     await telegram_app.updater.start_polling()
 
     acct_count = Account.count()
@@ -50,18 +52,17 @@ async def lifespan(app: FastAPI):
 
     try:
         text = (
-            "━━━━━━━━━━━━━━━━━━━\n"
-            "🤖 *GPT Image Bot*\n"
-            "━━━━━━━━━━━━━━━━━━━\n\n"
-            "🟢 **Bot Restarted Successfully**\n\n"
-            "📋 Status:\n"
-            f"• 👤 Accounts: {Account.count()}\n"
-            f"• ⏳ Queue pending: {Queue.get_pending_count()}\n"
-            "• 🔄 Session check: Every 30m\n"
-            "• ⏰ Limit auto-reset: Every 5m\n\n"
-            "━━━━━━━━━━━━━━━━━━━\n"
-            "⚙️ *All systems operational*\n"
-            "─────────────────────"
+            f"{SEP}\n"
+            f"{center('🤖 GPT Image Bot')}\n"
+            f"{SEP}\n\n"
+            f"🟢 **Bot Restarted Successfully**\n\n"
+            f"📋 Status:\n"
+            f"  • 👤 Accounts: {Account.count()}\n"
+            f"  • ⏳ Queue pending: {Queue.get_pending_count()}\n"
+            f"  • 🔄 Session check: Every 30m\n"
+            f"  • ⏰ Limit auto-reset: Every 5m\n\n"
+            f"{SEP}\n"
+            f"⚙️ *All systems operational*"
         )
         for uid in config.ADMIN_IDS:
             try:
@@ -107,14 +108,13 @@ async def limit_reset_loop():
             n = reset_limited_accounts()
             if n > 0 and telegram_app:
                 text = (
-                    "━━━━━━━━━━━━━━━━━━━\n"
-                    "🔄 *Limit Reset* ── *Auto* ── *Active*\n"
-                    "━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"{SEP}\n"
+                    f"{center('🔄 Limit Reset')}\n"
+                    f"{SEP}\n\n"
                     f"✅ **{n} account(s) restored!**\n"
-                    "⏰ Their limit has expired.\n"
-                    "📥 Ready for image generation.\n\n"
-                    "━━━━━━━━━━━━━━━━━━━\n"
-                    "─────────────────────"
+                    f"⏰ Their limit has expired.\n"
+                    f"📥 Ready for image generation.\n\n"
+                    f"{SEP}"
                 )
                 for uid in config.ADMIN_IDS:
                     try:

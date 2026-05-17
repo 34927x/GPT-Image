@@ -58,6 +58,16 @@ class Queue:
 
     @staticmethod
     def add(prompt, user_id, image_size="1:1", bulk_count=1):
+        if isinstance(prompt, list):
+            return [queue_col.insert_one({
+                "prompts": prompt,
+                "is_bulk": True,
+                "status": Queue.STATUS_PENDING,
+                "user_id": user_id,
+                "image_size": image_size,
+                "created_at": datetime.now(timezone.utc),
+                "processed_at": None
+            })]
         items = []
         for i in range(bulk_count):
             items.append(queue_col.insert_one({

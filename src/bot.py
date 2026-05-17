@@ -11,7 +11,7 @@ from models import Account, Queue
 from accounts.manager import (is_admin, export_accounts, import_accounts,
                               get_session_status, mark_expired, add_manual_account,
                               reset_limited_accounts, parse_limit_reset_time)
-from worker import submit_prompt, close as close_worker, check_session
+from worker import submit_prompt, submit_bulk, close as close_worker, check_session
 from ui import (box, error_box, menu_header, queue_box, progress_box,
                 result_box, status_box, accounts_box, queued_box, help_box,
                 image_caption, center, SEP, END)
@@ -104,6 +104,7 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text.strip()
     ud = context.user_data
+    user_id = update.effective_user.id
 
     if ud.get("awaiting_import"):
         await update.message.reply_text(
@@ -322,19 +323,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not prompt and ud.get("pending_bulk_file"):
             prompts = ud.pop("pending_bulk_file", [])
             image_size = ud.get("pending_size", "1:1")
-            count = 0
-            for p in prompts:
-                Queue.add(p, user_id, image_size=image_size, bulk_count=1)
-                count += 1
+            Queue.add(prompts, user_id, image_size=image_size)
             ud.pop("pending_size", None)
             await safe_edit(query.message,
                 box("✅ Bulk Queued",
                     "━━ ✅ *Bulk Upload Successful* ━━\n\n"
-                    f"   • 📥 Added `{count}` prompts from file\n"
+                    f"   • 📥 Added `{len(prompts)}` prompts from file\n"
                     f"   • 📐 Size: `{image_size}`\n"
                     f"   • 🎯 Position: `#{Queue.get_pending_count()}`\n\n"
                     "━━ ⏰ *What Now?* ━━\n"
-                    "   • 🔄 Processing automatically in background\n"
+                    "   • 🔄 Processing all in one session\n"
                     "   • 📬 Each image sent here when ready\n"
                     "   • 📊 Check status anytime",
                     emoji="✅"),
@@ -342,7 +340,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=main_menu()
             )
             asyncio.create_task(process_queue())
-            return
 
         if not prompt:
             await safe_edit(query.message,
@@ -687,13 +684,74 @@ async def process_queue():
                 break
 
             qid = item["_id"]
-            prompt = item["prompt"]
             user_id = item["user_id"]
-            batch_idx = item.get("batch_index", 0)
-            batch_total = item.get("batch_total", 1)
             image_size = item.get("image_size", "1:1")
 
             Queue.update_status(qid, Queue.STATUS_PROCESSING)
+
+            is_bulk = item.get("is_bulk")
+            if is_bulk:
+                prompts = item.get("prompts", [])
+                progress_msg = None
+                try:
+                    from telegram import Bot
+                    bot = Bot(config.BOT_TOKEN)
+                    msg = (
+                        f"{SEP}\n"
+                        f"{center('📁 Bulk Processing')}\n"
+                        f"{SEP}\n\n"
+                        f"  • 📄 Total: `{len(prompts)}` prompts\n"
+                        f"  • 📐 Size: `{image_size}`\n\n"
+                        f"⏳ Processing..."
+                    )
+                    progress_msg = await bot.send_message(
+                        chat_id=user_id, text=msg, parse_mode="Markdown"
+                    )
+                except Exception:
+                    pass
+
+                async def bulk_cb(msg: str):
+                    if progress_msg:
+                        try:
+                            await progress_msg.edit_text(
+                                f"{SEP}\n{center('📁 Bulk Processing')}\n{SEP}\n\n"
+                                f"  • 📄 Total: `{len(prompts)}` prompts\n"
+                                f"  • 📐 Size: `{image_size}`\n\n"
+                                f"  {msg}",
+                                parse_mode="Markdown"
+                            )
+                        except Exception:
+                            pass
+
+                from worker import submit_bulk
+                results = await submit_bulk(prompts, image_size=image_size, progress_callback=bulk_cb)
+                success_count = sum(1 for r in results if r.get("success"))
+                fail_count = sum(1 for r in results if not r.get("success"))
+                Queue.update_status(qid, Queue.STATUS_DONE if fail_count == 0 else Queue.STATUS_FAIL)
+                if progress_msg:
+                    try:
+                        await progress_msg.edit_text(
+                            f"{SEP}\n{center('✅ Bulk Complete')}\n{SEP}\n\n"
+                            f"  • ✅ Success: `{success_count}`\n"
+                            f"  • ❌ Failed: `{fail_count}`\n"
+                            f"  • 📐 Size: `{image_size}`",
+                            parse_mode="Markdown"
+                        )
+                    except Exception:
+                        pass
+                for i, r in enumerate(results):
+                    if r.get("success") and r.get("image_url"):
+                        await send_image_to_user({
+                            "user_id": user_id,
+                            "prompt": prompts[i],
+                            "batch_index": i,
+                            "batch_total": len(prompts),
+                        }, r["image_url"])
+                continue
+
+            prompt = item["prompt"]
+            batch_idx = item.get("batch_index", 0)
+            batch_total = item.get("batch_total", 1)
 
             progress_msg = None
             try:

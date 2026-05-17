@@ -530,3 +530,71 @@ async def check_session():
                     pass
     print(f"[worker] check_session done: {len(expired)} expired")
     return expired
+
+async def submit_bulk(prompts, image_size="1:1", retry=5, progress_callback=None):
+    async with worker_lock:
+        print(f"[worker] submit_bulk: {len(prompts)} prompts, size={image_size}")
+        for attempt in range(retry):
+            account = get_next_account()
+            if not account:
+                if progress_callback:
+                    await progress_callback("❌ No valid accounts")
+                return [{"success": False, "error": "No accounts"} for _ in prompts]
+
+            name = display_name(account)
+            if progress_callback:
+                await progress_callback(f"🔄 Attempt {attempt+1} — `{name}`")
+
+            p, ctx = await login(account, cb=progress_callback)
+            if p is None:
+                mark_error(account["_id"])
+                continue
+
+            if progress_callback:
+                await progress_callback(f"✅ Logged in as `{name}`")
+
+            results = []
+            for i, prompt in enumerate(prompts):
+                if progress_callback:
+                    await progress_callback(f"📝 `{i+1}/{len(prompts)}`: `{prompt[:40]}...`")
+
+                try:
+                    ta = await find_visible(p, [
+                        '#prompt-textarea', 'textarea', '[contenteditable="true"]',
+                        'div[contenteditable="true"]', '[data-message-author-role]',
+                    ], timeout=5000)
+                    if not ta:
+                        results.append({"success": False, "error": "Prompt input not found"})
+                        continue
+
+                    await ta.click(click_count=3)
+                    await asyncio.sleep(0.3)
+                    await p.keyboard.type(prompt, delay=10)
+                    await asyncio.sleep(1)
+
+                    send_btn = await find_visible(p, GENERATE_BTN_SELECTORS, timeout=5000)
+                    if send_btn:
+                        await send_btn.click()
+                    else:
+                        await p.keyboard.press("Enter")
+
+                    await asyncio.sleep(3)
+
+                    image_url = await wait_for_image(p)
+                    if image_url:
+                        results.append({"success": True, "image_url": image_url, "account": name})
+                        mark_success(account["_id"])
+                    else:
+                        results.append({"success": False, "error": "No image"})
+
+                    if i < len(prompts) - 1:
+                        await p.goto(IMAGES_URL, wait_until="networkidle", timeout=30000)
+                        await asyncio.sleep(2)
+
+                except Exception as e:
+                    results.append({"success": False, "error": str(e)[:60]})
+
+            await ctx.close()
+            return results
+
+        return [{"success": False, "error": "All accounts exhausted"} for _ in prompts]
