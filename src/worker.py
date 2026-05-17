@@ -73,6 +73,17 @@ def fix_samesite(cookies):
     return cookies
 
 
+def filter_valid_cookies(cookies):
+    """Remove cookies with empty name/value (invalid for Playwright)."""
+    valid = []
+    for c in cookies:
+        name = c.get("name", "")
+        value = c.get("value", "")
+        if name and value:
+            valid.append(c)
+    return valid
+
+
 async def dismiss_popups(page):
     for sel in POPUP_SELECTORS:
         try:
@@ -268,32 +279,39 @@ async def login_account(account, cb=None):
     if cb:
         await cb("🌐 Navigating to ChatGPT...")
     try:
-        await page.goto(CHATGPT_URL, wait_until="networkidle", timeout=45000)
+        await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30000)
     except Exception as e:
-        print(f"[worker] Nav error: {e}")
+        print(f"[worker] Step 4 nav error: {e}")
         await ctx.close()
         return False
     await asyncio.sleep(3)
 
     try:
-        await page.reload(wait_until="networkidle", timeout=30000)
+        await page.reload(wait_until="domcontentloaded", timeout=20000)
     except Exception as e:
-        print(f"[worker] Reload error: {e}")
+        print(f"[worker] Step 5 reload error: {e}")
         await ctx.close()
         return False
 
     if cb:
         await cb("🍪 Injecting cookies...")
     cookies = fix_samesite(cookies)
-    await ctx.add_cookies(cookies)
+    cookies = filter_valid_cookies(cookies)
+    print(f"[worker] {len(cookies)} valid cookies after filter")
+    try:
+        await ctx.add_cookies(cookies)
+    except Exception as e:
+        print(f"[worker] Step 6 add_cookies error: {e}")
+        await ctx.close()
+        return False
     await asyncio.sleep(3)
 
     if cb:
         await cb("🔄 Verifying login...")
     try:
-        await page.goto(CHATGPT_URL, wait_until="networkidle", timeout=45000)
+        await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30000)
     except Exception as e:
-        print(f"[worker] Nav error: {e}")
+        print(f"[worker] Step 7 nav error: {e}")
         await ctx.close()
         return False
     await asyncio.sleep(5)
@@ -634,8 +652,14 @@ async def check_session():
                 page = await ctx.new_page()
                 await stealth_async(page)
                 cookies = fix_samesite(d.get("cookies", []))
-                await ctx.add_cookies(cookies)
-                await page.goto(CHATGPT_URL, wait_until="networkidle", timeout=45000)
+                cookies = filter_valid_cookies(cookies)
+                try:
+                    await ctx.add_cookies(cookies)
+                except Exception as ce:
+                    print(f"[worker] check_session: {label} add_cookies error: {ce}")
+                    await browser.close()
+                    continue
+                await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30000)
                 await asyncio.sleep(5)
                 if LOGIN_URL in page.url:
                     name = d.get("profile_name") or label
