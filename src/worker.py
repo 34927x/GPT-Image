@@ -292,21 +292,34 @@ async def login_account(account, cb=None):
         print(f"[worker] Browser unavailable for {label}")
         return False
 
-    ctx = await browser.new_context(
-        viewport={"width": 1280, "height": 800},
-        user_agent=USER_AGENT,
-        locale="en-US",
-    )
-    page = await ctx.new_page()
+    try:
+        ctx = await asyncio.wait_for(browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            user_agent=USER_AGENT,
+            locale="en-US",
+        ), timeout=10)
+        page = await asyncio.wait_for(ctx.new_page(), timeout=10)
+    except asyncio.TimeoutError:
+        print(f"[worker] Context/page creation timeout for {label}")
+        return False
+    except Exception as e:
+        print(f"[worker] Context creation error: {e}")
+        return False
     await stealth_async(page)
 
     if cb:
-        await cb("🔄 Launching browser...")
+        try:
+            await asyncio.wait_for(cb("🔄 Launching browser..."), timeout=5)
+        except:
+            pass
 
     await asyncio.sleep(5)
 
     if cb:
-        await cb("🌐 Navigating to ChatGPT...")
+        try:
+            await asyncio.wait_for(cb("🌐 Navigating to ChatGPT..."), timeout=5)
+        except:
+            pass
     try:
         await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30000)
     except Exception as e:
@@ -323,7 +336,10 @@ async def login_account(account, cb=None):
         return False
 
     if cb:
-        await cb("🍪 Injecting cookies...")
+        try:
+            await asyncio.wait_for(cb("🍪 Injecting cookies..."), timeout=5)
+        except:
+            pass
     cookies = _sanitize_cookies(cookies)
     print(f"[worker] {len(cookies)} valid cookies after sanitize")
     failed = 0
@@ -344,7 +360,10 @@ async def login_account(account, cb=None):
     await asyncio.sleep(3)
 
     if cb:
-        await cb("🔄 Verifying login...")
+        try:
+            await asyncio.wait_for(cb("🔄 Verifying login..."), timeout=5)
+        except:
+            pass
     try:
         await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30000)
     except Exception as e:
@@ -358,7 +377,10 @@ async def login_account(account, cb=None):
         mark_expired(account["_id"])
         await ctx.close()
         if cb:
-            await cb("❌ Session expired — account removed")
+            try:
+                await asyncio.wait_for(cb("❌ Session expired — account removed"), timeout=5)
+            except:
+                pass
         return False
     print(f"[worker] Login verified for {label}")
 
@@ -366,7 +388,10 @@ async def login_account(account, cb=None):
     await asyncio.sleep(2)
 
     if cb:
-        await cb("📍 Opening Images page...")
+        try:
+            await asyncio.wait_for(cb("📍 Opening Images page..."), timeout=5)
+        except:
+            pass
     try:
         await page.goto(IMAGES_URL, wait_until="domcontentloaded", timeout=20000)
     except Exception as e:
@@ -410,18 +435,29 @@ async def create_guest_context():
     browser = get_browser()
     if not browser:
         return None, None
-    ctx = await browser.new_context(
-        storage_state=_master["storage_state"],
-        viewport={"width": 1280, "height": 800},
-        user_agent=USER_AGENT,
-        locale="en-US",
-    )
-    page = await ctx.new_page()
+    try:
+        ctx = await asyncio.wait_for(browser.new_context(
+            storage_state=_master["storage_state"],
+            viewport={"width": 1280, "height": 800},
+            user_agent=USER_AGENT,
+            locale="en-US",
+        ), timeout=10)
+        page = await asyncio.wait_for(ctx.new_page(), timeout=10)
+    except:
+        return None, None
     await stealth_async(page)
     return ctx, page
 
 
 # ── Submit prompt ──
+
+async def _pc(progress_callback, msg):
+    """Fire progress callback with 5s timeout."""
+    if progress_callback:
+        try:
+            await asyncio.wait_for(progress_callback(msg), timeout=5)
+        except:
+            pass
 
 async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=None):
     async with worker_lock:
@@ -429,8 +465,7 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
         for attempt in range(retry):
             account = get_next_account()
             if not account:
-                if progress_callback:
-                    await progress_callback("❌ No valid accounts available")
+                await _pc(progress_callback, "❌ No valid accounts available")
                 return {"success": False, "error": "No valid accounts"}
 
             if account.get("_limited_info"):
@@ -440,30 +475,25 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                 h, m = first["hours_left"], first["minutes_left"]
                 err = f"⏳ All accounts limited — resets in {h}h {m}m"
                 print(f"[worker] {err}")
-                if progress_callback:
-                    await progress_callback(f"{err} ({names})")
+                await _pc(progress_callback, f"{err} ({names})")
                 return {"success": False, "error": err, "limited_accounts": limited}
 
             name = display_name(account)
-            if progress_callback:
-                await progress_callback(f"🔄 Attempt {attempt+1} — `{name}`")
+            await _pc(progress_callback, f"🔄 Attempt {attempt+1} — `{name}`")
 
             logged_in = await ensure_logged_in(account, cb=progress_callback)
             if not logged_in:
                 mark_error(account["_id"])
-                if progress_callback:
-                    await progress_callback(f"⚠️ `{name}` login failed")
+                await _pc(progress_callback, f"⚠️ `{name}` login failed")
                 continue
 
-            if progress_callback:
-                await progress_callback(f"✅ Logged in as `{name}`")
+            await _pc(progress_callback, f"✅ Logged in as `{name}`")
 
             ctx, page = None, None
             try:
                 ctx, page = await create_guest_context()
                 if not ctx:
-                    if progress_callback:
-                        await progress_callback("⚠️ Failed to create guest context")
+                    await _pc(progress_callback, "⚠️ Failed to create guest context")
                     continue
 
                 await page.goto(IMAGES_URL, wait_until="domcontentloaded", timeout=20000)
@@ -474,8 +504,7 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                     print(f"[worker] Prompt not visible for {name}")
                     await ctx.close()
                     mark_error(account["_id"])
-                    if progress_callback:
-                        await progress_callback("⚠️ Prompt input not found")
+                    await _pc(progress_callback, "⚠️ Prompt input not found")
                     continue
 
                 ta = await find_visible(page, PROMPT_SELECTORS, timeout=5000)
@@ -496,8 +525,7 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
 
                 await asyncio.sleep(3)
 
-                if progress_callback:
-                    await progress_callback("⏳ Generating image...")
+                await _pc(progress_callback, "⏳ Generating image...")
 
                 image_url = await wait_for_image(page)
 
@@ -505,8 +533,7 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                     mark_success(account["_id"])
                     print(f"[worker] IMAGE: {image_url[:80]}...")
                     await ctx.close()
-                    if progress_callback:
-                        await progress_callback(f"✅ Done on `{name}`")
+                    await _pc(progress_callback, f"✅ Done on `{name}`")
                     return {"success": True, "image_url": image_url, "account": name}
 
                 body = await page.text_content("body") or ""
@@ -516,13 +543,11 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                     await ctx.close()
                     left = (reset_at - datetime.now(timezone.utc)).total_seconds()
                     h, m = int(left // 3600), int((left % 3600) // 60)
-                    if progress_callback:
-                        await progress_callback(f"⏳ `{name}` limit — resets in {h}h {m}m")
+                    await _pc(progress_callback, f"⏳ `{name}` limit — resets in {h}h {m}m")
                     continue
 
                 await ctx.close()
-                if progress_callback:
-                    await progress_callback("❌ No image generated")
+                await _pc(progress_callback, "❌ No image generated")
                 return {"success": False, "error": "No image generated"}
 
             except Exception as e:
