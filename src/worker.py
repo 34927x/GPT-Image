@@ -308,12 +308,21 @@ async def login_account(account, cb=None):
         await cb("🍪 Injecting cookies...")
     cookies = _sanitize_cookies(cookies)
     print(f"[worker] {len(cookies)} valid cookies after sanitize")
-    try:
-        await ctx.add_cookies(cookies)
-    except Exception as e:
-        print(f"[worker] Step 6 add_cookies error: {e}")
+    failed = 0
+    for i, c in enumerate(cookies):
+        try:
+            await ctx.add_cookies([c])
+        except Exception as e:
+            failed += 1
+            if failed <= 3:
+                print(f"[worker] Cookie #{i} ({c.get('name')}) failed: {str(e)[:80]}")
+    if failed == len(cookies):
+        print(f"[worker] ALL {failed} cookies failed — login impossible")
         await ctx.close()
         return False
+    if failed:
+        print(f"[worker] {failed}/{len(cookies)} cookies failed (non-critical), continuing")
+    print(f"[worker] {len(cookies)-failed} cookies injected successfully")
     await asyncio.sleep(3)
 
     if cb:
