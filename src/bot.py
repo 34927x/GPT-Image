@@ -11,7 +11,7 @@ from models import Account, Queue
 from accounts.manager import (is_admin, export_accounts, import_accounts,
                               get_session_status, mark_expired, add_manual_account,
                               reset_limited_accounts, parse_limit_reset_time)
-from worker import submit_prompt, submit_bulk, close as close_worker, check_session
+from worker import submit_prompt, submit_bulk, check_session
 from ui import (box, error_box, menu_header, queue_box, progress_box,
                 result_box, status_box, accounts_box, queued_box, help_box,
                 image_caption, center, SEP, END)
