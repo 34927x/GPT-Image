@@ -63,13 +63,8 @@ BROWSER_ARGS = [
 
 
 def _sanitize_cookies(cookies):
-    """Convert Chrome extension cookie format to Playwright-compatible format.
-    
-    CDP's Storage.setCookies accepts sameSite: Strict | Lax | NoRestriction.
-    Playwright's add_cookies passes values through without translation,
-    so we must use CDP-compatible values directly.
-    """
-    same_site_cdp = {"strict": "Strict", "lax": "Lax", "no_restriction": "NoRestriction"}
+    """Convert Chrome extension cookie format to Playwright-compatible format."""
+    same_site_pw = {"strict": "Strict", "lax": "Lax", "no_restriction": "None", "unspecified": "None"}
     allowed = {"name", "value", "domain", "path", "httpOnly", "secure", "sameSite", "expires"}
     out = []
     for c in cookies:
