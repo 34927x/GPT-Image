@@ -29,7 +29,7 @@ async def safe_edit(msg, *args, **kwargs):
 
 # ── Keyboards ──
 
-def main_menu():
+def main_menu(user_id: int = None):
     kb = [
         [InlineKeyboardButton("🎨 Generate", callback_data="gen")],
         [InlineKeyboardButton("📋 Queue", callback_data="myqueue"),
@@ -37,6 +37,8 @@ def main_menu():
         [InlineKeyboardButton("👥 Accounts", callback_data="accounts"),
          InlineKeyboardButton("❓ Help", callback_data="help")],
     ]
+    if user_id and is_admin(user_id):
+        kb.append([InlineKeyboardButton("⚙️ Admin", callback_data="admin")])
     return InlineKeyboardMarkup(kb)
 
 def admin_menu():
@@ -94,10 +96,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━━\n"
         "─────────────────────"
     )
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=main_menu())
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=main_menu(update.effective_user.id))
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(menu_header(), parse_mode="Markdown", reply_markup=main_menu())
+    await update.message.reply_text(menu_header(), parse_mode="Markdown", reply_markup=main_menu(update.effective_user.id))
 
 # ── Auto-detect: any text = prompt ──
 
@@ -681,7 +683,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "back_main":
-        await safe_edit(query.message,menu_header(), parse_mode="Markdown", reply_markup=main_menu())
+        await safe_edit(query.message,menu_header(), parse_mode="Markdown", reply_markup=main_menu(user_id))
         return
 
 # ── Queue Processor ──
@@ -801,5 +803,5 @@ async def status_command(update, context):
     await update.message.reply_text(
         status_box(ac, qs['pending'], qs.get('processing',0), qs['done'], qs['fail'], ses),
         parse_mode="Markdown",
-        reply_markup=main_menu()
+        reply_markup=main_menu(update.effective_user.id)
     )
