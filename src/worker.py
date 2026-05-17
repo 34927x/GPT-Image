@@ -643,45 +643,45 @@ async def check_session():
                 print(f"[worker] check_session: {label} error — {e}")
                 await close_browser()
 
-        # Not current account — launch temp browser
+        # Not current account — use persistent browser (new context)
         try:
-            p, browser = None, None
+            browser = get_browser()
+            if not browser or not browser.is_connected():
+                print(f"[worker] check_session: {label} persistent browser unavailable")
+                continue
+            ctx = await browser.new_context(
+                viewport={"width": 1280, "height": 800},
+                user_agent=USER_AGENT,
+            )
+            page = None
             try:
-                p = await async_playwright().start()
-                browser = await p.chromium.launch(
-                    headless=True, args=["--no-sandbox", "--single-process"]
-                )
-                ctx = await browser.new_context(
-                    viewport={"width": 1280, "height": 800},
-                    user_agent=USER_AGENT,
-                )
                 page = await ctx.new_page()
                 await stealth_async(page)
+                await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=20000)
+                await asyncio.sleep(3)
                 cookies = _sanitize_cookies(d.get("cookies", []))
                 try:
                     await ctx.add_cookies(cookies)
                 except Exception as ce:
                     print(f"[worker] check_session: {label} add_cookies error: {ce}")
-                    await browser.close()
+                    await ctx.close()
                     continue
-                await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30000)
+                await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=20000)
                 await asyncio.sleep(5)
                 if LOGIN_URL in page.url:
                     name = d.get("profile_name") or label
                     expired.append({"label": label, "profile_name": name, "deleted": True})
                     accounts_col.delete_one({"_id": d["_id"]})
-                await browser.close()
             finally:
-                if browser:
+                if page:
                     try:
-                        await browser.close()
+                        await page.close()
                     except:
                         pass
-                if p:
-                    try:
-                        await p.stop()
-                    except:
-                        pass
+                try:
+                    await ctx.close()
+                except:
+                    pass
         except Exception as e:
             print(f"[worker] check_session: {label} temp error — {e}")
 
