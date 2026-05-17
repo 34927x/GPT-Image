@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
 
     session_task = asyncio.create_task(session_check_loop())
     limit_task = asyncio.create_task(limit_reset_loop())
-    init_all_browsers_background()
+    asyncio.create_task(init_all_browsers_background())
 
     # Process any pending queue items from before restart
     if queue_count > 0:
