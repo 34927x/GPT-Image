@@ -34,17 +34,29 @@ def import_accounts(data):
 def get_next_account():
     now = datetime.now(timezone.utc)
     docs = list(accounts_col.find().sort("last_used", 1))
+    limited_accounts = []
     for d in docs:
         if d.get("expired"):
             continue
         if d.get("limited"):
             reset_at = d.get("limit_reset_at")
             if reset_at and reset_at > now:
+                left = (reset_at - now).total_seconds()
+                h = int(left // 3600)
+                m = int((left % 3600) // 60)
+                limited_accounts.append({
+                    "label": d.get("profile_name") or d.get("label", "Unknown"),
+                    "reset_at": reset_at,
+                    "hours_left": h,
+                    "minutes_left": m
+                })
                 continue
-            accounts_col.update_one({"_id": d["_id"]}, {"$set": {"limited": False, "limit_reset_at": None, "error_count": 0}})
+            accounts_col.update_one({"_id": d["_id"]}, {"$set": {"limited": False, "limit_reset_at": None, "limit_hit_at": None, "error_count": 0}})
         errs = d.get("error_count", 0)
         if errs < 3:
             return d
+    if limited_accounts:
+        return {"_limited_info": True, "accounts": limited_accounts}
     accounts_col.update_many({}, {"$set": {"error_count": 0}})
     return None
 
@@ -66,6 +78,7 @@ def mark_limited(account_id, reset_at):
         "$set": {
             "limited": True,
             "limit_reset_at": reset_at,
+            "limit_hit_at": datetime.now(timezone.utc),
             "last_used": datetime.now(timezone.utc)
         }
     })
@@ -78,7 +91,7 @@ def reset_limited_accounts():
     now = datetime.now(timezone.utc)
     count = accounts_col.update_many(
         {"limited": True, "limit_reset_at": {"$lt": now}},
-        {"$set": {"limited": False, "limit_reset_at": None, "error_count": 0}}
+        {"$set": {"limited": False, "limit_reset_at": None, "limit_hit_at": None, "error_count": 0}}
     )
     return count.modified_count
 
@@ -114,6 +127,13 @@ def get_session_status():
         limited = d.get("limited", False)
         errs = d.get("error_count", 0)
         hours_since = (now - last).total_seconds() / 3600 if last else 0
+        first_loaded = d.get("first_loaded_at")
+        if first_loaded and first_loaded.tzinfo is None:
+            first_loaded = first_loaded.replace(tzinfo=timezone.utc)
+        is_fresh = first_loaded and (now - first_loaded).total_seconds() < 3600
+        limit_hit_at = d.get("limit_hit_at")
+        if limit_hit_at and limit_hit_at.tzinfo is None:
+            limit_hit_at = limit_hit_at.replace(tzinfo=timezone.utc)
         if expired:
             status = "❌ Expired"
         elif limited:
@@ -129,7 +149,8 @@ def get_session_status():
             status = "⚠️ Errors"
         else:
             status = "✅ Active"
-        lines.append(f"{i+1}. `{name}` — {status} — {hours_since:.0f}h ago")
+        fresh_tag = " 🆕" if is_fresh else ""
+        lines.append(f"{i+1}. `{name}` — {status}{fresh_tag} — {hours_since:.0f}h ago")
     return lines
 
 def parse_limit_reset_time(body):

@@ -1,4 +1,4 @@
-import asyncio, re
+import asyncio, re, os
 from datetime import datetime, timezone
 from playwright.async_api import async_playwright, TimeoutError as PwTimeout
 from playwright_stealth import stealth_async  # Cloudflare bot detection bypass
@@ -8,6 +8,8 @@ from accounts.manager import (
     get_next_account, mark_success, mark_error, mark_expired,
     mark_limited, update_profile_name, parse_limit_reset_time,
 )
+
+DEBUG_MODE = os.getenv("DEBUG", "false").lower() == "true"
 
 # Global lock: only one task uses the browser at a time to prevent crashes
 worker_lock = asyncio.Lock()
@@ -23,7 +25,7 @@ async def get_browser():
     if _browser is None:
         p = await async_playwright().start()
         _browser = await p.chromium.launch(
-            headless=True,
+            headless=not DEBUG_MODE,  # Set DEBUG=true to see browser
             args=[
                 "--disable-blink-features=AutomationControlled",  # Cloudflare bypass
                 "--no-sandbox", "--disable-setuid-sandbox",
@@ -32,6 +34,9 @@ async def get_browser():
                 "--no-first-run",
             ]
         )
+        if DEBUG_MODE:
+            print("[worker] DEBUG MODE: Browser is VISIBLE (not headless)")
+            print("[worker] Open DevTools > Application tab to see cookies")
     return _browser
 
 async def close():
@@ -41,6 +46,7 @@ async def close():
         _browser = None
 
 async def new_context(cookies):
+    """Create browser context - optionally with cookies"""
     b = await get_browser()
     ctx = await b.new_context(
         viewport={"width": 1280, "height": 800},
@@ -48,6 +54,7 @@ async def new_context(cookies):
         locale="en-US", timezone_id="America/New_York"
     )
     if cookies:
+        print(f"[worker] new_context: Adding {len(cookies)} cookies (used by check_session)")
         await ctx.add_cookies(cookies)
     return ctx
 
@@ -171,49 +178,120 @@ async def dismiss_popups(page):
             pass
 
 async def login(account, cb=None):
+    """Login with step-by-step verification"""
     label = account.get("label", "?")
-    print(f"[worker] Login attempt: {label}")
+    print(f"[worker] ========== LOGIN START: {label} ==========")
 
-    ctx = await new_context(account["cookies"])
+    # ── Step 1: Launch browser ONLY (no context, no page, no cookies) ──
+    print(f"[worker] Step 1: Launch browser process")
+    print(f"[worker]   → src/worker.py:188 (get_browser)")
+    b = await get_browser()
+    print(f"[worker] Step 1: DONE - Browser launched")
+
+    # ── Step 2: Wait 5 seconds ──
+    print(f"[worker] Step 2: Wait 5 seconds (no cookies yet)")
+    await asyncio.sleep(5)
+    print(f"[worker] Step 2: DONE - 5 seconds complete")
+
+    # ── Step 3: Create context + page (NO cookies) ──
+    print(f"[worker] Step 3: Create browser context (NO cookies)")
+    print(f"[worker]   → src/worker.py:202 (b.new_context)")
+    ctx = await b.new_context(
+        viewport={"width": 1280, "height": 800},
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        locale="en-US", timezone_id="America/New_York"
+    )
     p = await ctx.new_page()
-
-    # Apply stealth to bypass Cloudflare bot detection
     await stealth_async(p)
+    print(f"[worker] Step 3: DONE - Context + page created, NO cookies")
 
+    # ── Step 4: Go to chatgpt.com (no cookies) ──
+    print(f"[worker] Step 4: Go to {CHATGPT_URL} (no cookies)")
     try:
         await p.goto(CHATGPT_URL, wait_until="networkidle", timeout=45000)
-    except PwTimeout:
-        print(f"[worker] TIMEOUT navigating to {CHATGPT_URL}")
+        print(f"[worker] Step 4: DONE - Page loaded: {p.url}")
+    except Exception as e:
+        print(f"[worker] Step 4: FAILED - {e}")
         await ctx.close()
         return None, None
 
-    await asyncio.sleep(5)  # Cloudflare challenge time
+    # ── Step 5: Reload page ──
+    print(f"[worker] Step 5: Reload page")
+    try:
+        await p.reload(wait_until="networkidle", timeout=30000)
+        print(f"[worker] Step 5: DONE - Page reloaded")
+    except Exception as e:
+        print(f"[worker] Step 5: FAILED - {e}")
+        await ctx.close()
+        return None, None
+
+    # ── Step 6: Inject cookies NOW ──
+    print(f"[worker] ===== COOKIE INJECTION START =====")
+    print(f"[worker] Step 6: Inject cookies into browser context")
+    cookies = account.get("cookies", [])
+    print(f"[worker] Step 6: Found {len(cookies)} cookies in account data")
+
+    cookie_names = [c.get('name', '?') for c in cookies[:5]]
+    print(f"[worker] Step 6: Cookie names: {cookie_names}...")
+
+    if cookies:
+        print(f"[worker] Step 6: Calling ctx.add_cookies() at src/worker.py:238")
+        await ctx.add_cookies(cookies)
+        print(f"[worker] Step 6: DONE - {len(cookies)} cookies injected")
+        print(f"[worker]   → Check DevTools > Application > Cookies > chatgpt.com")
+    else:
+        print(f"[worker] Step 6: FAILED - No cookies in account")
+        await ctx.close()
+        return None, None
+
+    await asyncio.sleep(3)
+    print(f"[worker] ===== COOKIE INJECTION END =====")
+
+    # ── Step 7: Go to chatgpt.com (with cookies) - verify login ──
+    print(f"[worker] Step 7: Go to {CHATGPT_URL} (WITH cookies)")
+    try:
+        await p.goto(CHATGPT_URL, wait_until="networkidle", timeout=45000)
+        print(f"[worker] Step 7: DONE - Page loaded: {p.url}")
+    except Exception as e:
+        print(f"[worker] Step 7: FAILED - {e}")
+        await ctx.close()
+        return None, None
+
+    await asyncio.sleep(3)
     await dismiss_popups(p)
 
     current_url = p.url
-    print(f"[worker] After nav, URL = {current_url}")
+    print(f"[worker] Checking login status: {current_url}")
 
     if LOGIN_URL in current_url:
-        print(f"[worker] SESSION EXPIRED for {label} — redirected to login page")
+        print(f"[worker] Step 7: FAILED - Session expired (redirected to login)")
         mark_expired(account["_id"])
         await ctx.close()
         return None, None
 
-    print(f"[worker] Login OK for {label}")
+    print(f"[worker] Step 7: DONE - Login verified")
 
+    # ── Step 8: Go to images page ──
+    print(f"[worker] Step 8: Go to {IMAGES_URL}")
     if cb:
         await cb("📍 Opening Images page...")
+
     try:
-        await p.goto(IMAGES_URL, wait_until="domcontentloaded", timeout=20000)
-    except:
-        pass
-    await wait_stable(p, timeout_sec=10)
+        await p.goto(IMAGES_URL, wait_until="networkidle", timeout=30000)
+        print(f"[worker] Step 8: DONE - Images page loaded: {p.url}")
+    except Exception as e:
+        print(f"[worker] Step 8: FAILED - {e}")
+        await ctx.close()
+        return None, None
+
+    await asyncio.sleep(3)
 
     name = await capture_profile_name(p)
     if name:
         update_profile_name(account["_id"], name)
         print(f"[worker] Profile name: {name}")
 
+    print(f"[worker] ========== LOGIN COMPLETE: {label} ==========")
     return p, ctx
 
 GENERATE_BTN_SELECTORS = [
@@ -268,20 +346,37 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                 await progress_callback("❌ No valid accounts available")
             return {"success": False, "error": "No valid accounts"}
 
+        if account.get("_limited_info"):
+            limited_accts = account["accounts"]
+            acct_names = ", ".join([a["label"] for a in limited_accts])
+            first_acct = limited_accts[0]
+            h = first_acct["hours_left"]
+            m = first_acct["minutes_left"]
+            error_msg = f"⏳ Account limit reached — resets in {h}h {m}m"
+            print(f"[worker] ALL ACCOUNTS LIMITED: {error_msg}")
+            if progress_callback:
+                await progress_callback(f"{error_msg} ({acct_names})")
+            return {"success": False, "error": error_msg, "limited_accounts": limited_accts}
+
         name = display_name(account)
 
         if progress_callback:
             await progress_callback(f"🔄 Attempt {attempt+1} — `{name}`")
 
+        # Step 1: Verify login + Step 2: Navigate to images
         p, ctx = await login(account, cb=progress_callback)
         if p is None:
             mark_error(account["_id"])
             if progress_callback:
-                await progress_callback("⚠️ Session expired, trying next...")
+                await progress_callback(f"⚠️ `{name}` login failed — skipping, trying next...")
             continue
 
         if progress_callback:
             await progress_callback(f"✅ Logged in as `{name}`")
+
+        # Debug: print current URL
+        print(f"[worker] Current URL before finding prompt: {p.url}")
+        await asyncio.sleep(2)
 
         for dismiss_sel in [
             'button:has-text("Stay logged out")',
@@ -294,6 +389,7 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
             try:
                 btn = await p.query_selector(dismiss_sel)
                 if btn and await btn.is_visible():
+                    print(f"[worker] Clicking dismiss button: {dismiss_sel}")
                     await btn.click()
                     await asyncio.sleep(1)
             except:
@@ -301,13 +397,17 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
 
         await wait_stable(p)
 
+        print(f"[worker] Checking if prompt is visible...")
         if not await ensure_prompt_visible(p):
+            print(f"[worker] ERROR: Prompt not visible, taking screenshot")
             await p.screenshot(path="/tmp/worker-prompt-fail.png")
             await ctx.close()
             mark_error(account["_id"])
             if progress_callback:
                 await progress_callback("⚠️ No prompt input found, rotating...")
             continue
+
+        print(f"[worker] Prompt visible, proceeding to type...")
 
         try:
             ta = await find_visible(p, [
@@ -413,6 +513,7 @@ async def check_session():
             await stealth_async(p)
             await p.goto(CHATGPT_URL, wait_until="networkidle", timeout=45000)
             await asyncio.sleep(5)
+            await dismiss_popups(p)
             if LOGIN_URL in p.url:
                 print(f"[worker] check_session: {label} EXPIRED — redirected to login")
                 mark_expired(d["_id"])

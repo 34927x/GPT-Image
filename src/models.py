@@ -12,6 +12,8 @@ class Account:
             "active": False,
             "limited": False,
             "limit_reset_at": None,
+            "limit_hit_at": None,
+            "first_loaded_at": datetime.now(timezone.utc),
             "created_at": datetime.now(timezone.utc),
             "last_used": None,
             "error_count": 0,

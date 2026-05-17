@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
 import config
@@ -128,6 +129,15 @@ async def limit_reset_loop():
 
 app = FastAPI(lifespan=lifespan, title="GPT Image Bot", docs_url=None, redoc_url=None)
 
+# CORS - Allow extension to push cookies
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 @app.get("/")
 async def root():
     return {"status": "ok", "bot": "GPT Image Bot by TurabCoder"}
@@ -165,18 +175,22 @@ async def receive_cookies(request: Request):
 
     existing = accounts_col.find_one({"label": label})
     if existing:
+        update_data = {
+            "cookies": cookies,
+            "source": "extension",
+            "profile_name": profile_name,
+            "last_updated": datetime.now(timezone.utc),
+            "expired": False,
+            "limited": False,
+            "limit_reset_at": None,
+            "limit_hit_at": None,
+            "error_count": 0
+        }
+        if not existing.get("first_loaded_at"):
+            update_data["first_loaded_at"] = datetime.now(timezone.utc)
         accounts_col.update_one(
             {"_id": existing["_id"]},
-            {"$set": {
-                "cookies": cookies,
-                "source": "extension",
-                "profile_name": profile_name,
-                "last_updated": datetime.now(timezone.utc),
-                "expired": False,
-                "limited": False,
-                "limit_reset_at": None,
-                "error_count": 0
-            }}
+            {"$set": update_data}
         )
         return {"success": True, "action": "updated", "label": label}
 
@@ -196,6 +210,8 @@ async def list_accounts():
             "expired": d.get("expired", False),
             "limited": d.get("limited", False),
             "limit_reset_at": str(d.get("limit_reset_at", "")) if d.get("limit_reset_at") else None,
+            "limit_hit_at": str(d.get("limit_hit_at", "")) if d.get("limit_hit_at") else None,
+            "first_loaded_at": str(d.get("first_loaded_at", "")) if d.get("first_loaded_at") else None,
             "error_count": d.get("error_count", 0),
             "created_at": str(d.get("created_at", "")),
         }
@@ -209,6 +225,6 @@ async def refresh_cookies(label: str):
         raise HTTPException(404, "Account not found")
     accounts_col.update_one(
         {"_id": doc["_id"]},
-        {"$set": {"expired": False, "limited": False, "limit_reset_at": None, "error_count": 0}}
+        {"$set": {"expired": False, "limited": False, "limit_reset_at": None, "limit_hit_at": None, "error_count": 0}}
     )
     return {"success": True}

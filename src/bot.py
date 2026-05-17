@@ -1,4 +1,5 @@
 import asyncio, io, json as jmod, re
+from datetime import datetime, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 from telegram.ext import (Application, CommandHandler, MessageHandler,
@@ -500,13 +501,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=main_menu()
             )
             return
+        now = datetime.now(timezone.utc)
         lines = []
         for i, d in enumerate(docs[:10]):
             c = len(d.get("cookies", []))
             name = d.get("profile_name") or d.get("label", f"#{i+1}")
             exp = "❌" if d.get("expired") else ("⏳" if d.get("limited") else "✅")
             src = "🌐" if d.get("source") == "extension" else "📦"
-            lines.append(f"   • {src}{exp} `{name}` ({c} cookies)")
+            first_loaded = d.get("first_loaded_at")
+            if first_loaded and first_loaded.tzinfo is None:
+                first_loaded = first_loaded.replace(tzinfo=timezone.utc)
+            is_fresh = first_loaded and (now - first_loaded).total_seconds() < 3600
+            fresh_tag = "🆕" if is_fresh else ""
+            lines.append(f"   • {src}{exp}{fresh_tag} `{name}` ({c} cookies)")
         if len(docs) > 10:
             lines.append(f"\n   • ...and {len(docs)-10} more")
         await safe_edit(query.message,accounts_box(lines), parse_mode="Markdown", reply_markup=main_menu())
