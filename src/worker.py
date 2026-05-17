@@ -242,7 +242,12 @@ async def login_account(account, cb=None):
 
     cookies = account.get("cookies", [])
     if not cookies:
-        print(f"[worker] No cookies for {label}")
+        print(f"[worker] No cookies for {label}, deleting")
+        mark_expired(account["_id"])
+        return False
+    if len(cookies) < 10:
+        print(f"[worker] Only {len(cookies)} cookies for {label} (need >= 10), deleting")
+        mark_expired(account["_id"])
         return False
 
     browser = await ensure_browser()
