@@ -63,30 +63,39 @@ BROWSER_ARGS = [
 
 
 def _sanitize_cookies(cookies):
-    """Convert Chrome extension cookie format to Playwright-compatible format."""
-    same_site_map = {"strict": "Strict", "lax": "Lax", "none": "None", "no_restriction": "None", "unspecified": "None"}
-    allowed = {"name", "value", "domain", "path", "httpOnly", "secure", "sameSite", "expires", "maxAge"}
+    """Convert Chrome extension cookie format to Playwright-compatible format.
+    
+    CDP's Storage.setCookies accepts sameSite: Strict | Lax | NoRestriction.
+    Playwright's add_cookies passes values through without translation,
+    so we must use CDP-compatible values directly.
+    """
+    same_site_cdp = {"strict": "Strict", "lax": "Lax", "no_restriction": "NoRestriction"}
+    allowed = {"name", "value", "domain", "path", "httpOnly", "secure", "sameSite", "expires"}
     out = []
     for c in cookies:
         name = c.get("name")
         value = c.get("value")
         if not name or not value:
             continue
-        cleaned = {"name": str(name), "value": str(value)}
-        if "domain" in c and c["domain"]:
-            cleaned["domain"] = str(c["domain"])
-        if "path" in c and c["path"]:
-            cleaned["path"] = str(c["path"])
-        if "httpOnly" in c:
-            cleaned["httpOnly"] = bool(c["httpOnly"])
-        if "secure" in c:
-            cleaned["secure"] = bool(c["secure"])
-        ss = c.get("sameSite", "")
-        if isinstance(ss, str) and ss.lower() in same_site_map:
-            cleaned["sameSite"] = same_site_map[ss.lower()]
-        exp = c.get("expirationDate") or c.get("expires")
-        if exp and isinstance(exp, (int, float)):
-            cleaned["expires"] = exp
+        cleaned = {}
+        for k in allowed:
+            if k in c:
+                v = c[k]
+                if k in ("httpOnly", "secure"):
+                    cleaned[k] = bool(v)
+                elif k == "sameSite":
+                    ss = v.lower() if isinstance(v, str) else ""
+                    if ss in same_site_cdp:
+                        cleaned[k] = same_site_cdp[ss]
+                elif k == "expires":
+                    if isinstance(v, (int, float)):
+                        cleaned[k] = v
+                else:
+                    cleaned[k] = str(v)
+        if "domain" not in cleaned or not cleaned["domain"]:
+            continue
+        if "path" not in cleaned:
+            cleaned["path"] = "/"
         out.append(cleaned)
     return out
 
