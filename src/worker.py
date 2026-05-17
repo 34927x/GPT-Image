@@ -62,26 +62,33 @@ BROWSER_ARGS = [
 ]
 
 
-def fix_samesite(cookies):
-    same_site_map = {"strict": "Strict", "lax": "Lax", "none": "None"}
+def _sanitize_cookies(cookies):
+    """Convert Chrome extension cookie format to Playwright-compatible format."""
+    same_site_map = {"strict": "Strict", "lax": "Lax", "none": "None", "no_restriction": "None", "unspecified": "None"}
+    allowed = {"name", "value", "domain", "path", "httpOnly", "secure", "sameSite", "expires", "maxAge"}
+    out = []
     for c in cookies:
+        name = c.get("name")
+        value = c.get("value")
+        if not name or not value:
+            continue
+        cleaned = {"name": str(name), "value": str(value)}
+        if "domain" in c and c["domain"]:
+            cleaned["domain"] = str(c["domain"])
+        if "path" in c and c["path"]:
+            cleaned["path"] = str(c["path"])
+        if "httpOnly" in c:
+            cleaned["httpOnly"] = bool(c["httpOnly"])
+        if "secure" in c:
+            cleaned["secure"] = bool(c["secure"])
         ss = c.get("sameSite", "")
         if isinstance(ss, str) and ss.lower() in same_site_map:
-            c["sameSite"] = same_site_map[ss.lower()]
-        if c.get("sameSite") not in ("Strict", "Lax", "None"):
-            c.pop("sameSite", None)
-    return cookies
-
-
-def filter_valid_cookies(cookies):
-    """Remove cookies with empty name/value (invalid for Playwright)."""
-    valid = []
-    for c in cookies:
-        name = c.get("name", "")
-        value = c.get("value", "")
-        if name and value:
-            valid.append(c)
-    return valid
+            cleaned["sameSite"] = same_site_map[ss.lower()]
+        exp = c.get("expirationDate") or c.get("expires")
+        if exp and isinstance(exp, (int, float)):
+            cleaned["expires"] = exp
+        out.append(cleaned)
+    return out
 
 
 async def dismiss_popups(page):
@@ -295,9 +302,8 @@ async def login_account(account, cb=None):
 
     if cb:
         await cb("🍪 Injecting cookies...")
-    cookies = fix_samesite(cookies)
-    cookies = filter_valid_cookies(cookies)
-    print(f"[worker] {len(cookies)} valid cookies after filter")
+    cookies = _sanitize_cookies(cookies)
+    print(f"[worker] {len(cookies)} valid cookies after sanitize")
     try:
         await ctx.add_cookies(cookies)
     except Exception as e:
@@ -651,8 +657,7 @@ async def check_session():
                 )
                 page = await ctx.new_page()
                 await stealth_async(page)
-                cookies = fix_samesite(d.get("cookies", []))
-                cookies = filter_valid_cookies(cookies)
+                cookies = _sanitize_cookies(d.get("cookies", []))
                 try:
                     await ctx.add_cookies(cookies)
                 except Exception as ce:
