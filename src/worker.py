@@ -208,20 +208,35 @@ def get_playwright():
 async def ensure_browser():
     if get_browser() and get_browser().is_connected():
         return get_browser()
+    # Browser disconnected or crashed — force-replace it
     if get_browser():
         try:
-            await get_browser().close()
+            await asyncio.wait_for(get_browser().close(), timeout=5)
         except:
             pass
-    p = await async_playwright().start()
-    browser = await p.chromium.launch(
-        headless=not os.getenv("DEBUG", "false").lower() == "true",
-        args=BROWSER_ARGS,
-    )
-    _browser_data["p"] = p
-    _browser_data["browser"] = browser
-    print("[worker] Single persistent browser launched")
-    return browser
+        _browser_data["browser"] = None
+    if get_playwright():
+        try:
+            await asyncio.wait_for(get_playwright().stop(), timeout=5)
+        except:
+            pass
+        _browser_data["p"] = None
+    try:
+        p = await asyncio.wait_for(async_playwright().start(), timeout=10)
+        browser = await asyncio.wait_for(p.chromium.launch(
+            headless=not os.getenv("DEBUG", "false").lower() == "true",
+            args=BROWSER_ARGS,
+        ), timeout=30)
+        _browser_data["p"] = p
+        _browser_data["browser"] = browser
+        print("[worker] Single persistent browser launched")
+        return browser
+    except asyncio.TimeoutError:
+        print("[worker] ensure_browser timeout — giving up")
+        return None
+    except Exception as e:
+        print(f"[worker] ensure_browser error: {e}")
+        return None
 
 
 async def close_browser():
@@ -273,6 +288,9 @@ async def login_account(account, cb=None):
         return False
 
     browser = await ensure_browser()
+    if not browser:
+        print(f"[worker] Browser unavailable for {label}")
+        return False
 
     ctx = await browser.new_context(
         viewport={"width": 1280, "height": 800},
@@ -656,27 +674,38 @@ async def check_session():
                 print(f"[worker] check_session: {label} error — {e}")
                 await close_browser()
 
-        # Not current account — use persistent browser (new context)
+        # Not current account — launch temp browser
         try:
-            browser = get_browser()
-            if not browser or not browser.is_connected():
-                print(f"[worker] check_session: {label} persistent browser unavailable")
-                continue
-            ctx = await browser.new_context(
-                viewport={"width": 1280, "height": 800},
-                user_agent=USER_AGENT,
-            )
-            page = None
+            p, temp_browser = None, None
             try:
+                p = await asyncio.wait_for(async_playwright().start(), timeout=10)
+                temp_browser = await asyncio.wait_for(p.chromium.launch(
+                    headless=True, args=["--no-sandbox", "--single-process"]
+                ), timeout=30)
+                ctx = await temp_browser.new_context(
+                    viewport={"width": 1280, "height": 800},
+                    user_agent=USER_AGENT,
+                )
                 page = await ctx.new_page()
                 await stealth_async(page)
-                await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=20000)
+                # Navigate first, then add cookies (fixes __Secure- cookie issues)
+                try:
+                    await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=20000)
+                except Exception as e:
+                    print(f"[worker] check_session: {label} nav error: {e}")
+                    await ctx.close()
+                    continue
                 await asyncio.sleep(3)
                 cookies = _sanitize_cookies(d.get("cookies", []))
-                try:
-                    await ctx.add_cookies(cookies)
-                except Exception as ce:
-                    print(f"[worker] check_session: {label} add_cookies error: {ce}")
+                injected = 0
+                for c in cookies:
+                    try:
+                        await ctx.add_cookies([c])
+                        injected += 1
+                    except:
+                        pass
+                if injected == 0:
+                    print(f"[worker] check_session: {label} all cookies rejected")
                     await ctx.close()
                     continue
                 await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=20000)
@@ -686,17 +715,20 @@ async def check_session():
                     expired.append({"label": label, "profile_name": name, "deleted": True})
                     accounts_col.delete_one({"_id": d["_id"]})
             finally:
-                if page:
+                if temp_browser:
                     try:
-                        await page.close()
+                        await temp_browser.close()
                     except:
                         pass
-                try:
-                    await ctx.close()
-                except:
-                    pass
+                if p:
+                    try:
+                        await p.stop()
+                    except:
+                        pass
+        except asyncio.TimeoutError:
+            print(f"[worker] check_session: {label} timeout")
         except Exception as e:
-            print(f"[worker] check_session: {label} temp error — {e}")
+            print(f"[worker] check_session: {label} error — {e}")
 
     print(f"[worker] check_session done: {len(expired)} expired")
     return expired
