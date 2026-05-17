@@ -33,7 +33,7 @@ def import_accounts(data):
 
 def get_next_account():
     now = datetime.now(timezone.utc)
-    docs = list(accounts_col.find().sort("last_used", 1))
+    docs = list(accounts_col.find().sort("last_used", -1))
     limited_accounts = []
     for d in docs:
         if d.get("expired"):
@@ -69,9 +69,12 @@ def mark_success(account_id):
     })
 
 def mark_expired(account_id):
-    accounts_col.update_one({"_id": account_id}, {
-        "$set": {"expired": True, "last_used": datetime.now(timezone.utc)}
-    })
+    doc = accounts_col.find_one({"_id": account_id})
+    if doc:
+        name = doc.get("profile_name") or doc.get("label", "Unknown")
+        accounts_col.delete_one({"_id": account_id})
+        return name
+    return None
 
 def mark_limited(account_id, reset_at):
     accounts_col.update_one({"_id": account_id}, {

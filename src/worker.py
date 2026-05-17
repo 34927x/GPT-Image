@@ -4,6 +4,7 @@ from playwright.async_api import async_playwright, TimeoutError as PwTimeout
 from playwright_stealth import stealth_async  # Cloudflare bot detection bypass
 
 from models import Account
+from db import accounts_col
 from accounts.manager import (
     get_next_account, mark_success, mark_error, mark_expired,
     mark_limited, update_profile_name, parse_limit_reset_time,
@@ -503,8 +504,10 @@ async def check_session():
     for d in docs:
         label = d.get("label", "?")
         if d.get("expired"):
-            print(f"[worker] check_session: {label} already expired, skipping")
-            expired.append(d)
+            print(f"[worker] check_session: {label} already expired, deleting")
+            name = d.get("profile_name") or label
+            expired.append({"label": label, "profile_name": name, "deleted": True})
+            accounts_col.delete_one({"_id": d["_id"]})
             continue
         ctx = None
         try:
@@ -516,8 +519,9 @@ async def check_session():
             await dismiss_popups(p)
             if LOGIN_URL in p.url:
                 print(f"[worker] check_session: {label} EXPIRED — redirected to login")
-                mark_expired(d["_id"])
-                expired.append(d)
+                name = d.get("profile_name") or label
+                expired.append({"label": label, "profile_name": name, "deleted": True})
+                accounts_col.delete_one({"_id": d["_id"]})
             else:
                 print(f"[worker] check_session: {label} OK")
             await ctx.close()
@@ -528,7 +532,7 @@ async def check_session():
                     await ctx.close()
                 except:
                     pass
-    print(f"[worker] check_session done: {len(expired)} expired")
+    print(f"[worker] check_session done: {len(expired)} expired/deleted")
     return expired
 
 async def submit_bulk(prompts, image_size="1:1", retry=5, progress_callback=None):

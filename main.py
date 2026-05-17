@@ -16,7 +16,7 @@ from ui import SEP, center
 
 telegram_app = None
 API_KEY = os.getenv("API_KEY", "")
-SESSION_CHECK_INTERVAL = int(os.getenv("SESSION_CHECK_INTERVAL", "30"))
+SESSION_CHECK_INTERVAL = int(os.getenv("SESSION_CHECK_INTERVAL", "5"))
 LIMIT_RESET_INTERVAL = int(os.getenv("LIMIT_RESET_INTERVAL", "5"))
 
 @asynccontextmanager
@@ -88,8 +88,17 @@ async def session_check_loop():
             expired = await check_session()
             if expired and telegram_app:
                 for acct in expired:
-                    label = acct.get("profile_name") or acct.get("label", "Unknown")
-                    msg = f"⚠️ Session expired: `{label}`\nRe-capture cookies from extension."
+                    name = acct.get("profile_name", "Unknown")
+                    label = acct.get("label", "Unknown")
+                    msg = (
+                        f"{SEP}\n"
+                        f"{center('❌ Account Expired')}\n"
+                        f"{SEP}\n\n"
+                        f"  • 👤 Name: `{name}`\n"
+                        f"  • 🏷️ Label: `{label}`\n\n"
+                        f"🗑️ Removed from database.\n"
+                        f"🔄 Add fresh cookies via extension."
+                    )
                     for uid in config.ADMIN_IDS:
                         try:
                             await telegram_app.bot.send_message(chat_id=uid, text=msg, parse_mode="Markdown")
