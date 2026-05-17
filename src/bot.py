@@ -14,7 +14,7 @@ from accounts.manager import (is_admin, export_accounts, import_accounts,
 from worker import submit_prompt, close as close_worker, check_session
 from ui import (box, error_box, menu_header, queue_box, progress_box,
                 result_box, status_box, accounts_box, queued_box, help_box,
-                image_caption, center, SEP, DIV, END)
+                image_caption, center, SEP, END)
 
 queue_semaphore = asyncio.Semaphore(1)
 
@@ -77,7 +77,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"{SEP}\n"
         f"{center('🎨 Welcome to GPT Image Bot!')}\n"
-        f"{DIV}\n\n"
+        f"{SEP}\n\n"
         f"🚀 *How It Works*\n"
         f"  • 📝 Send any text → AI generates image\n"
         f"  • 📁 Upload `.txt` file → Bulk processing\n"
@@ -185,17 +185,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    ud["pending_prompt"] = txt
-    ud["awaiting_size"] = True
+    Queue.add(txt, user_id, image_size="1:1", bulk_count=1)
     await update.message.reply_text(
-        box("📐 Choose Size",
-            f"━━ 📐 *Select Aspect Ratio* ━━\n\n"
-            f"   • ✏️ Prompt: `{txt[:100]}`\n\n"
-            "   Choose image shape below:",
-            emoji="📐"),
+        queued_box(txt[:50], "1:1", "1️⃣ Single", Queue.get_pending_count()),
         parse_mode="Markdown",
-        reply_markup=size_menu()
+        reply_markup=main_menu(user_id)
     )
+    asyncio.create_task(process_queue())
 
 # ── Gen command ──
 
@@ -215,17 +211,14 @@ async def gen_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu()
         )
         return
-    context.user_data["pending_prompt"] = prompt
-    context.user_data["awaiting_size"] = True
+    user_id = update.effective_user.id
+    Queue.add(prompt, user_id, image_size="1:1", bulk_count=1)
     await update.message.reply_text(
-        box("📐 Choose Size",
-            f"━━ 📐 *Select Aspect Ratio* ━━\n\n"
-            f"   • ✏️ Prompt: `{prompt[:100]}`\n\n"
-            "   Choose image shape below:",
-            emoji="📐"),
+        queued_box(prompt[:50], "1:1", "1️⃣ Single", Queue.get_pending_count()),
         parse_mode="Markdown",
-        reply_markup=size_menu()
+        reply_markup=main_menu(user_id)
     )
+    asyncio.create_task(process_queue())
 
 # ── File handler (TXT prompts + JSON import) ──
 
@@ -461,7 +454,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines = [
             SEP,
             center("📋 Your Queue"),
-            DIV,
+            SEP,
             f"  • 📊 *Total:* {len(items)} item(s)",
             "",
         ]
@@ -472,7 +465,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(f"  • {si} `{p}`{batch}")
         lines += [
             "",
-            DIV,
+            SEP,
             "📌 *Status Guide*",
             "  ⏳ Pending    🔄 Processing",
             "  ✅ Done       ❌ Failed",
@@ -529,7 +522,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = (
             f"{SEP}\n"
             f"{center('⚙️ Admin Control Panel')}\n"
-            f"{DIV}\n\n"
+            f"{SEP}\n\n"
             f"📋 *Available Actions*\n"
             f"  • ➕ Add Account — Paste cookies JSON\n"
             f"  • 📦 Export — Download all accounts\n"
@@ -601,7 +594,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = (
             f"{SEP}\n"
             f"{center('➕ Add New Account')}\n"
-            f"{DIV}\n\n"
+            f"{SEP}\n\n"
             f"📋 *Instructions*\n\n"
             f"  • 📋 Paste cookies JSON from Chrome extension\n"
             f"  • 📝 Format:\n"
@@ -633,17 +626,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines = [
             SEP,
             center("✅ Session Check Complete"),
-            DIV,
+            SEP,
             f"  • 🔄 Limits Reset: `{n}` account(s)",
             "",
-            DIV,
+            SEP,
             "📋 *Account Status Report*",
         ]
         for s in ses:
             lines.append(f"  • {s}")
         lines += [
             "",
-            DIV,
+            SEP,
             "📌 *Legend*",
             "  ✅ Active    ❌ Expired",
             "  ⏳ Limited   ⚠️ Errors",
@@ -661,16 +654,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines = [
             SEP,
             center("⏰ Limit Reset Complete"),
-            DIV,
+            SEP,
             f"  • 🔄 Restored: `{n}` account(s)",
             "",
-            DIV,
+            SEP,
             "📋 *Current Status*",
         ]
         for s in ses:
             lines.append(f"  • {s}")
         lines += [
-            DIV,
+            SEP,
             "📌 *Legend*",
             "  ✅ Active    ❌ Expired",
             "  ⏳ Limited   ⚠️ Errors",

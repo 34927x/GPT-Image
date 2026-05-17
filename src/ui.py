@@ -1,5 +1,4 @@
 SEP = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-DIV = "──────────────────────────────────────"
 END = SEP
 
 def center(text):
@@ -14,7 +13,7 @@ def box(title, body, emoji="🤖", credit=True):
     lines = [
         SEP,
         center(f"{emoji} {title}"),
-        DIV,
+        SEP,
         body,
         END,
     ]
@@ -40,25 +39,25 @@ def error_box(title="😵‍💫 Oops! Something Went Wrong!", body="An unexpect
     lines = [
         SEP,
         center("😵‍💫 Error"),
-        DIV,
+        SEP,
         "",
         f"📝 `{body}`",
         "",
-        DIV,
+        SEP,
         "🔍 *Possible Reasons:*",
     ]
     for r in reasons:
         lines.append(f"  • {r}")
     lines += [
         "",
-        DIV,
+        SEP,
         "💡 *Recommended Actions:*",
     ]
     for t in tips:
         lines.append(f"  • {t}")
     lines += [
         "",
-        DIV,
+        SEP,
         "🆘 *Need Help?* → @TurabCoder",
         "🔐 *Security:* Your Data is 100% Safe",
         END,
@@ -70,7 +69,7 @@ def menu_header(title="📌 Main Menu"):
     lines = [
         SEP,
         center(title),
-        DIV,
+        SEP,
         "",
         "👇 Use the buttons below to navigate:",
         END,
@@ -81,12 +80,12 @@ def queue_box(prompt, image_size, batch_info=""):
     lines = [
         SEP,
         center("🎨 Generating"),
-        DIV,
+        SEP,
         "",
         f"📝 Prompt: `{prompt[:60]}`{batch_info}",
         f"📐 Aspect Ratio: `{image_size}`",
         "",
-        DIV,
+        SEP,
         "⏳ Status: Queued & Processing...",
         "⚡ ETA: Usually 30–90 seconds",
         END,
@@ -98,12 +97,12 @@ def progress_box(prompt, step, batch_info=""):
     lines = [
         SEP,
         center(f"🎯 Generating: `{prompt[:50]}`{batch_info}"),
-        DIV,
+        SEP,
         "",
         "📌 *Current Step:*",
         f"  {step}",
         "",
-        DIV,
+        SEP,
         "⏳ Please wait while we process your request...",
         END,
         "_🤖 Powered by @TurabCoder_",
@@ -114,15 +113,15 @@ def result_box(prompt, image_url, batch_info=""):
     lines = [
         SEP,
         center("✅ Image Generated!"),
-        DIV,
+        SEP,
         "",
         f"📝 Prompt: `{prompt[:100]}`{batch_info}",
         "",
-        DIV,
+        SEP,
         "🔗 *Download Link:*",
         f"📎 `{image_url}`",
         "",
-        DIV,
+        SEP,
         "📤 Image sent to your chat above! ⬆️",
         END,
         "_🤖 Powered by @TurabCoder_",
@@ -133,7 +132,7 @@ def status_box(accounts, pending, processing, done, failed, sessions):
     lines = [
         SEP,
         center("📊 Live Status"),
-        DIV,
+        SEP,
         "",
         "📋 *Overview*",
         f"  • 👤 Accounts: `{accounts}`",
@@ -142,7 +141,7 @@ def status_box(accounts, pending, processing, done, failed, sessions):
         f"  • ✅ Completed: `{done}`",
         f"  • ❌ Failed: `{failed}`",
         "",
-        DIV,
+        SEP,
         "🔐 *Account Sessions*",
     ]
     for s in sessions[:5]:
@@ -151,14 +150,14 @@ def status_box(accounts, pending, processing, done, failed, sessions):
         lines.append(f"  • ... and {len(sessions)-5} more")
     lines += [
         "",
-        DIV,
+        SEP,
         "⚙️ *System*",
         "  • Session Check: Every 30m",
         "  • Limit Reset: Every 5m",
         "  • Max Retry: 5 accounts",
         "  • Rate Limit Protection: Active",
         "",
-        DIV,
+        SEP,
         "🔄 Auto-Recovery: Enabled",
         END,
         "_🤖 Powered by @TurabCoder_",
@@ -169,14 +168,14 @@ def accounts_box(entries):
     lines = [
         SEP,
         center("👥 Accounts"),
-        DIV,
+        SEP,
     ]
     if not entries:
         lines += [
             "",
             "📭 No Accounts Registered Yet",
             "",
-            DIV,
+            SEP,
             "💡 *Quick Tips*",
             "  • Install the Chrome extension",
             "  • Log in to chatgpt.com",
@@ -190,7 +189,7 @@ def accounts_box(entries):
         lines.append(f"  {e}")
     lines += [
         "",
-        DIV,
+        SEP,
         "📌 *Legend*",
         "  🌐 = Extension    📦 = Manual",
         "  ✅ = Active       ❌ = Expired",
@@ -204,7 +203,7 @@ def queued_box(prompt, size, count, position):
     lines = [
         SEP,
         center("✅ Added to Queue!"),
-        DIV,
+        SEP,
         "",
         "📝 *Request Details*",
         f"  • ✏️ Prompt: `{prompt}`",
@@ -212,13 +211,13 @@ def queued_box(prompt, size, count, position):
         f"  • 🔢 Count: `{count}`",
         f"  • 🎯 Position: `#{position}`",
         "",
-        DIV,
+        SEP,
         "⏰ *What Happens Next*",
         "  • 🔄 Auto-processing in background",
         "  • 📬 Images sent here automatically",
         "  • ✅ You'll receive each one as ready",
         "",
-        DIV,
+        SEP,
         "💡 Tip: Check /status anytime",
         END,
         "_🤖 Powered by @TurabCoder_",
@@ -229,34 +228,34 @@ def help_box():
     lines = [
         SEP,
         center("📖 Help & Guide"),
-        DIV,
+        SEP,
         "",
         "🚀 *Getting Started*",
         "  • 📝 Send text → auto-generate image",
         "  • 📁 Upload `.txt` → bulk processing",
         "  • 🖼️ Images delivered in this chat",
         "",
-        DIV,
+        SEP,
         "⌨️ *Commands*",
         "  • /menu — Show navigation menu",
         "  • /gen <prompt> — Quick generate",
         "  • /status — Live bot & queue status",
         "  • /start — Initialize the bot",
         "",
-        DIV,
+        SEP,
         "💡 *Pro Tips*",
         "  • 🎨 Separate prompts by blank line in `.txt`",
         "  • 📐 Choose aspect ratio that fits",
         "  • 🔄 Multiple accounts = faster processing",
         "  • ⏳ Queue handles up to 100 tasks",
         "",
-        DIV,
+        SEP,
         "🔧 *Troubleshooting*",
         "  • ❌ Session expired → Re-sync extension",
         "  • ⏳ Limit reached → Wait for auto-reset",
         "  • 📬 Still issues? → @TurabCoder",
         "",
-        DIV,
+        SEP,
         "📌 *Quick Reference*",
         "  • 🎯 DALL·E image generation via ChatGPT",
         "  • 👥 Multi-account auto-rotate on limits",
@@ -271,11 +270,11 @@ def image_caption(prompt, batch_info=""):
     lines = [
         SEP,
         center("✨ Image Generated"),
-        DIV,
+        SEP,
         "",
         f"📝 `{prompt[:100]}`{batch_info}",
         "",
-        DIV,
+        SEP,
         "📥 Downloaded & Delivered ✅",
         END,
         "_🤖 Powered by @TurabCoder_",
