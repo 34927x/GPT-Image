@@ -80,8 +80,8 @@ def _sanitize_cookies(cookies):
                     cleaned[k] = bool(v)
                 elif k == "sameSite":
                     ss = v.lower() if isinstance(v, str) else ""
-                    if ss in same_site_cdp:
-                        cleaned[k] = same_site_cdp[ss]
+                    if ss in same_site_pw:
+                        cleaned[k] = same_site_pw[ss]
                 elif k == "expires":
                     if isinstance(v, (int, float)):
                         cleaned[k] = v
@@ -261,19 +261,6 @@ async def close_browser():
 # ── Master context (logged-in session per account) ──
 
 async def login_account(account, cb=None):
-    """
-    Exact test_playwright.py flow:
-    1. Launch browser (or reuse)
-    2. Create context + page (NO cookies)
-    3. Wait 5s
-    4. Navigate to chatgpt.com
-    5. Reload
-    6. Inject cookies (sameSite fix)
-    7. Navigate WITH cookies
-    8. Check login
-    9. Dismiss popups
-    10. Navigate to /images
-    """
     label = account.get("label", "?")
     print(f"[worker] ===== LOGIN: {label} (test_playwright.py flow) =====")
 
@@ -314,6 +301,7 @@ async def login_account(account, cb=None):
             pass
 
     await asyncio.sleep(5)
+    print(f"[worker] LOGIN step4: navigating to chatgpt.com...")
 
     if cb:
         try:
@@ -321,25 +309,29 @@ async def login_account(account, cb=None):
         except:
             pass
     try:
-        await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30000)
+        await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=60000)
     except Exception as e:
         print(f"[worker] Step 4 nav error: {e}")
         await ctx.close()
         return False
+    print(f"[worker] LOGIN step4 done: url={page.url[:60]}")
     await asyncio.sleep(3)
 
+    print(f"[worker] LOGIN step5: reloading...")
     try:
-        await page.reload(wait_until="domcontentloaded", timeout=20000)
+        await page.reload(wait_until="domcontentloaded", timeout=60000)
     except Exception as e:
         print(f"[worker] Step 5 reload error: {e}")
         await ctx.close()
         return False
+    print(f"[worker] LOGIN step5 done")
 
     if cb:
         try:
             await asyncio.wait_for(cb("🍪 Injecting cookies..."), timeout=5)
         except:
             pass
+    print(f"[worker] LOGIN step6: sanitizing {len(cookies)} cookies...")
     cookies = _sanitize_cookies(cookies)
     print(f"[worker] {len(cookies)} valid cookies after sanitize")
     failed = 0
@@ -358,18 +350,21 @@ async def login_account(account, cb=None):
         print(f"[worker] {failed}/{len(cookies)} cookies failed (non-critical), continuing")
     print(f"[worker] {len(cookies)-failed} cookies injected successfully")
     await asyncio.sleep(3)
+    print(f"[worker] LOGIN step6 done: {len(cookies)} valid cookies, {failed} failed")
 
     if cb:
         try:
             await asyncio.wait_for(cb("🔄 Verifying login..."), timeout=5)
         except:
             pass
+    print(f"[worker] LOGIN step7: navigating with cookies...")
     try:
-        await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30000)
+        await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=60000)
     except Exception as e:
         print(f"[worker] Step 7 nav error: {e}")
         await ctx.close()
         return False
+    print(f"[worker] LOGIN step7 done: url={page.url[:60]}")
     await asyncio.sleep(5)
 
     if LOGIN_URL in page.url:
