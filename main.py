@@ -12,6 +12,7 @@ from models import Queue, Account
 from bot import (start, menu_command, gen_command, button_handler,
                  handle_text, handle_file, process_queue, status_command)
 from accounts.manager import reset_limited_accounts
+from worker import init_all_browsers_background
 from ui import SEP, center
 
 telegram_app = None
@@ -44,6 +45,7 @@ async def lifespan(app: FastAPI):
 
     session_task = asyncio.create_task(session_check_loop())
     limit_task = asyncio.create_task(limit_reset_loop())
+    init_all_browsers_background()
 
     # Process any pending queue items from before restart
     if queue_count > 0:
@@ -59,7 +61,7 @@ async def lifespan(app: FastAPI):
             f"📋 Status:\n"
             f"  • 👤 Accounts: {Account.count()}\n"
             f"  • ⏳ Queue pending: {Queue.get_pending_count()}\n"
-            f"  • 🔄 Session check: Every 30m\n"
+            f"  • 🔄 Session check: Every 5m\n"
             f"  • ⏰ Limit auto-reset: Every 5m\n\n"
             f"{SEP}\n"
             f"⚙️ *All systems operational*"

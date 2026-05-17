@@ -152,7 +152,7 @@ def status_box(accounts, pending, processing, done, failed, sessions):
         "",
         SEP,
         "⚙️ *System*",
-        "  • Session Check: Every 30m",
+        "  • Session Check: Every 5m",
         "  • Limit Reset: Every 5m",
         "  • Max Retry: 5 accounts",
         "  • Rate Limit Protection: Active",

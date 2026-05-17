@@ -527,7 +527,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"  • 🔄 Check Sessions — Validate all\n"
             f"  • ⏰ Reset Limits — Restore limited accts\n\n"
             f"⚙️ *Auto-Systems*\n"
-            f"  • 🔄 Session check: Every 30 minutes\n"
+            f"  • 🔄 Session check: Every 5 minutes\n"
             f"  • ⏰ Limit reset: Every 5 minutes\n"
             f"  • 📬 Notifications sent here\n\n"
             f"{END}"
