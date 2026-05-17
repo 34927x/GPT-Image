@@ -1,4 +1,4 @@
-import asyncio, re, os
+import asyncio, re, os, io
 from datetime import datetime, timezone
 from playwright.async_api import async_playwright, TimeoutError as PwTimeout
 from playwright_stealth import stealth_async
@@ -11,8 +11,12 @@ from accounts.manager import (
 )
 
 worker_lock = asyncio.Lock()
-_browsers_lock = asyncio.Lock()
-_browsers = {}
+
+# Single persistent browser (lazy init, kept alive across requests)
+_browser_data = {"p": None, "browser": None}
+
+# Current logged-in account's master context
+_master = {"ctx": None, "page": None, "account": None, "storage_state": None}
 
 CHATGPT_URL = "https://chatgpt.com"
 IMAGES_URL = "https://chatgpt.com/images"
@@ -24,37 +28,31 @@ CREATE_BTN_SELECTORS = [
     '[data-testid="create-button"]', 'button[aria-label*="Create"]',
     'button:has(svg.lucide-plus)',
 ]
-
 GENERATE_BTN_SELECTORS = [
     '[data-testid="send-button"]', 'button[type="submit"]',
     'button:has(svg.lucide-arrow-up)', 'button[aria-label*="Send"]',
     'button:has-text("Generate")', 'button:has-text("Send")',
 ]
-
 IMAGE_SELECTORS = [
     'img[src*="dalle"]', 'img[src*="oaidalle"]',
     'img[src*="gpt-image"]', 'img[alt*="DALL"]', 'img[alt*="Generated"]',
 ]
-
 STOP_SELECTORS = [
     '[data-testid="stop-button"]', 'button:has(svg.lucide-square)',
     'button[aria-label="Stop"]', 'button:has-text("Stop")',
 ]
-
 POPUP_SELECTORS = [
     'button:has-text("Okay, let\'s go")', 'button:has-text("Got it")',
     'button:has-text("Stay logged out")', 'button:has-text("Continue")',
     'button:has-text("Dismiss")', 'button:has-text("Okay")',
     '[aria-label="Close"]', '.btn-close',
 ]
-
 PROMPT_SELECTORS = [
     '#prompt-textarea', 'textarea', '[contenteditable="true"]',
     'div[contenteditable="true"]', '[data-message-author-role]',
 ]
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-
 BROWSER_ARGS = [
     "--disable-blink-features=AutomationControlled",
     "--no-sandbox", "--disable-setuid-sandbox",
@@ -62,23 +60,6 @@ BROWSER_ARGS = [
     "--single-process", "--disable-accelerated-2d-canvas",
     "--no-first-run",
 ]
-
-
-async def _launch_browser():
-    p = await async_playwright().start()
-    browser = await p.chromium.launch(
-        headless=not os.getenv("DEBUG", "false").lower() == "true",
-        args=BROWSER_ARGS,
-    )
-    return p, browser
-
-
-async def _new_context(browser):
-    return await browser.new_context(
-        viewport={"width": 1280, "height": 800},
-        user_agent=USER_AGENT,
-        locale="en-US",
-    )
 
 
 def fix_samesite(cookies):
@@ -194,122 +175,183 @@ async def wait_for_image(p, timeout=180000):
     return None
 
 
-# ── Persistent browser pool ──
+# ── Browser lifecycle (single persistent browser) ──
 
-async def _login_account(account, cb=None):
-    """Full 10-step login for an account. Returns BrowserSession."""
+def get_browser():
+    return _browser_data["browser"]
+
+def get_playwright():
+    return _browser_data["p"]
+
+async def ensure_browser():
+    if get_browser() and get_browser().is_connected():
+        return get_browser()
+    if get_browser():
+        try:
+            await get_browser().close()
+        except:
+            pass
+    p = await async_playwright().start()
+    browser = await p.chromium.launch(
+        headless=not os.getenv("DEBUG", "false").lower() == "true",
+        args=BROWSER_ARGS,
+    )
+    _browser_data["p"] = p
+    _browser_data["browser"] = browser
+    print("[worker] Single persistent browser launched")
+    return browser
+
+
+async def close_browser():
+    if get_browser():
+        try:
+            await get_browser().close()
+        except:
+            pass
+    if get_playwright():
+        try:
+            await get_playwright().stop()
+        except:
+            pass
+    _browser_data["p"] = None
+    _browser_data["browser"] = None
+    _master["ctx"] = None
+    _master["page"] = None
+    _master["account"] = None
+    _master["storage_state"] = None
+
+
+# ── Master context (logged-in session per account) ──
+
+async def login_account(account, cb=None):
+    """
+    Exact test_playwright.py flow:
+    1. Launch browser (or reuse)
+    2. Create context + page (NO cookies)
+    3. Wait 5s
+    4. Navigate to chatgpt.com
+    5. Reload
+    6. Inject cookies (sameSite fix)
+    7. Navigate WITH cookies
+    8. Check login
+    9. Dismiss popups
+    10. Navigate to /images
+    """
     label = account.get("label", "?")
-    print(f"[worker] ========== PERSISTENT LOGIN: {label} ==========")
+    print(f"[worker] ===== LOGIN: {label} (test_playwright.py flow) =====")
 
     cookies = account.get("cookies", [])
     if not cookies:
-        print(f"[worker] FAILED - No cookies for {label}")
-        return None
+        print(f"[worker] No cookies for {label}")
+        return False
 
-    p, browser = await _launch_browser()
-    ctx = await _new_context(browser)
+    browser = await ensure_browser()
+
+    ctx = await browser.new_context(
+        viewport={"width": 1280, "height": 800},
+        user_agent=USER_AGENT,
+        locale="en-US",
+    )
     page = await ctx.new_page()
     await stealth_async(page)
 
-    # Step 3: Wait 5s
+    if cb:
+        await cb("🔄 Launching browser...")
+
     await asyncio.sleep(5)
 
-    # Step 4: Navigate (no cookies)
+    if cb:
+        await cb("🌐 Navigating to ChatGPT...")
     try:
         await page.goto(CHATGPT_URL, wait_until="networkidle", timeout=45000)
     except Exception as e:
-        print(f"[worker] Step 4 error: {e}")
-        await browser.close()
-        return None
+        print(f"[worker] Nav error: {e}")
+        await ctx.close()
+        return False
     await asyncio.sleep(3)
 
-    # Step 5: Reload
     try:
         await page.reload(wait_until="networkidle", timeout=30000)
     except Exception as e:
-        print(f"[worker] Step 5 error: {e}")
-        await browser.close()
-        return None
+        print(f"[worker] Reload error: {e}")
+        await ctx.close()
+        return False
 
-    # Step 6: Inject cookies
+    if cb:
+        await cb("🍪 Injecting cookies...")
     cookies = fix_samesite(cookies)
     await ctx.add_cookies(cookies)
     await asyncio.sleep(3)
 
-    # Step 7: Navigate WITH cookies
+    if cb:
+        await cb("🔄 Verifying login...")
     try:
         await page.goto(CHATGPT_URL, wait_until="networkidle", timeout=45000)
     except Exception as e:
-        print(f"[worker] Step 7 error: {e}")
-        await browser.close()
-        return None
+        print(f"[worker] Nav error: {e}")
+        await ctx.close()
+        return False
     await asyncio.sleep(5)
 
-    # Step 8: Check login
     if LOGIN_URL in page.url:
-        print(f"[worker] Login FAILED - {label} expired")
+        print(f"[worker] LOGIN FAILED: {label} expired")
         mark_expired(account["_id"])
-        await browser.close()
-        return None
+        await ctx.close()
+        if cb:
+            await cb("❌ Session expired — account removed")
+        return False
     print(f"[worker] Login verified for {label}")
 
-    # Step 9: Dismiss popups
     await dismiss_popups(page)
     await asyncio.sleep(2)
 
-    # Step 10: Navigate to /images
     if cb:
         await cb("📍 Opening Images page...")
     try:
         await page.goto(IMAGES_URL, wait_until="domcontentloaded", timeout=20000)
     except Exception as e:
-        print(f"[worker] Step 10 nav error (non-fatal): {e}")
+        print(f"[worker] Images nav error: {e}")
     await asyncio.sleep(5)
 
     name = await capture_profile_name(page)
     if name:
         update_profile_name(account["_id"], name)
-        print(f"[worker] Profile name: {name}")
 
     storage = await ctx.storage_state()
 
-    print(f"[worker] ========== PERSISTENT LOGIN DONE: {label} ==========")
-    return {
-        "playwright": p,
-        "browser": browser,
-        "master_ctx": ctx,
-        "master_page": page,
-        "storage_state": storage,
-        "account_id": account["_id"],
-        "label": label,
-        "last_refreshed": datetime.now(timezone.utc),
-    }
+    # Close old master if switching accounts
+    if _master["ctx"] and _master["ctx"] != ctx:
+        try:
+            await _master["ctx"].close()
+        except:
+            pass
+
+    _master["ctx"] = ctx
+    _master["page"] = page
+    _master["account"] = account
+    _master["storage_state"] = storage
+
+    print(f"[worker] ===== LOGIN DONE: {label} =====")
+    return True
 
 
-async def get_or_init_browser(account):
-    """Get persistent browser session for account, init if missing."""
-    aid = account["_id"]
-    async with _browsers_lock:
-        existing = _browsers.get(aid)
-        if existing:
-            if existing["browser"] and existing["browser"].is_connected():
-                return existing
-            print(f"[worker] Browser {existing['label']} disconnected, re-init...")
-            try:
-                await existing["browser"].close()
-            except:
-                pass
-        new_session = await _login_account(account)
-        if new_session:
-            _browsers[aid] = new_session
-        return new_session
+async def ensure_logged_in(account, cb=None):
+    """Make sure master context is logged into the given account."""
+    current_id = _master["account"]["_id"] if _master["account"] else None
+    if current_id == account["_id"]:
+        return True
+    return await login_account(account, cb=cb)
 
 
-async def _create_guest_context(browser_session):
-    """Create a fresh isolated context from saved storage_state."""
-    storage = browser_session.get("storage_state")
-    ctx = await browser_session["browser"].new_context(
-        storage_state=storage,
+async def create_guest_context():
+    """Fresh isolated context from master's storage_state (guest profile)."""
+    if not _master["storage_state"]:
+        return None, None
+    browser = get_browser()
+    if not browser:
+        return None, None
+    ctx = await browser.new_context(
+        storage_state=_master["storage_state"],
         viewport={"width": 1280, "height": 800},
         user_agent=USER_AGENT,
         locale="en-US",
@@ -319,36 +361,7 @@ async def _create_guest_context(browser_session):
     return ctx, page
 
 
-def _is_expired(page_url):
-    return LOGIN_URL in page_url
-
-
-async def _refresh_storage(browser_session):
-    """Update storage_state from master context."""
-    try:
-        s = await browser_session["master_ctx"].storage_state()
-        browser_session["storage_state"] = s
-        browser_session["last_refreshed"] = datetime.now(timezone.utc)
-    except Exception as e:
-        print(f"[worker] storage refresh error for {browser_session['label']}: {e}")
-
-
-# ── Public API ──
-
-async def init_all_browsers_background():
-    """Startup: init browsers for all non-expired accounts in background."""
-    accounts = Account.get_all()
-    print(f"[worker] Initializing {len(accounts)} persistent browsers...")
-    for acct in accounts:
-        if acct.get("expired") or acct.get("limited"):
-            continue
-        aid = acct["_id"]
-        async with _browsers_lock:
-            if aid in _browsers:
-                continue
-        asyncio.create_task(get_or_init_browser(acct))
-    print(f"[worker] Browser init background tasks launched")
-
+# ── Submit prompt ──
 
 async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=None):
     async with worker_lock:
@@ -361,25 +374,25 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                 return {"success": False, "error": "No valid accounts"}
 
             if account.get("_limited_info"):
-                limited_accts = account["accounts"]
-                acct_names = ", ".join([a["label"] for a in limited_accts])
-                first = limited_accts[0]
+                limited = account["accounts"]
+                names = ", ".join([a["label"] for a in limited])
+                first = limited[0]
                 h, m = first["hours_left"], first["minutes_left"]
-                err = f"⏳ Account limit reached — resets in {h}h {m}m"
-                print(f"[worker] ALL LIMITED: {err}")
+                err = f"⏳ All accounts limited — resets in {h}h {m}m"
+                print(f"[worker] {err}")
                 if progress_callback:
-                    await progress_callback(f"{err} ({acct_names})")
-                return {"success": False, "error": err, "limited_accounts": limited_accts}
+                    await progress_callback(f"{err} ({names})")
+                return {"success": False, "error": err, "limited_accounts": limited}
 
             name = display_name(account)
             if progress_callback:
                 await progress_callback(f"🔄 Attempt {attempt+1} — `{name}`")
 
-            session = await get_or_init_browser(account)
-            if not session:
+            logged_in = await ensure_logged_in(account, cb=progress_callback)
+            if not logged_in:
                 mark_error(account["_id"])
                 if progress_callback:
-                    await progress_callback(f"⚠️ `{name}` login failed — skipping")
+                    await progress_callback(f"⚠️ `{name}` login failed")
                 continue
 
             if progress_callback:
@@ -387,7 +400,12 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
 
             ctx, page = None, None
             try:
-                ctx, page = await _create_guest_context(session)
+                ctx, page = await create_guest_context()
+                if not ctx:
+                    if progress_callback:
+                        await progress_callback("⚠️ Failed to create guest context")
+                    continue
+
                 await page.goto(IMAGES_URL, wait_until="domcontentloaded", timeout=20000)
                 await asyncio.sleep(3)
                 await dismiss_popups(page)
@@ -397,7 +415,7 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                     await ctx.close()
                     mark_error(account["_id"])
                     if progress_callback:
-                        await progress_callback("⚠️ No prompt input, rotating...")
+                        await progress_callback("⚠️ Prompt input not found")
                     continue
 
                 ta = await find_visible(page, PROMPT_SELECTORS, timeout=5000)
@@ -429,7 +447,6 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                     await ctx.close()
                     if progress_callback:
                         await progress_callback(f"✅ Done on `{name}`")
-                    await _refresh_storage(session)
                     return {"success": True, "image_url": image_url, "account": name}
 
                 body = await page.text_content("body") or ""
@@ -456,11 +473,13 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                     except:
                         pass
                 if progress_callback:
-                    await progress_callback(f"⚠️ {str(e)[:60]}... rotating")
+                    await progress_callback(f"⚠️ {str(e)[:60]}")
                 continue
 
         return {"success": False, "error": "All accounts exhausted"}
 
+
+# ── Submit bulk ──
 
 async def submit_bulk(prompts, image_size="1:1", retry=5, progress_callback=None):
     async with worker_lock:
@@ -476,8 +495,8 @@ async def submit_bulk(prompts, image_size="1:1", retry=5, progress_callback=None
             if progress_callback:
                 await progress_callback(f"🔄 Attempt {attempt+1} — `{name}`")
 
-            session = await get_or_init_browser(account)
-            if not session:
+            logged_in = await ensure_logged_in(account, cb=progress_callback)
+            if not logged_in:
                 mark_error(account["_id"])
                 continue
 
@@ -486,9 +505,16 @@ async def submit_bulk(prompts, image_size="1:1", retry=5, progress_callback=None
 
             ctx, page = None, None
             try:
-                ctx, page = await _create_guest_context(session)
+                ctx, page = await create_guest_context()
+                if not ctx:
+                    continue
+
                 results = []
+                limit_hit = False
                 for i, prompt in enumerate(prompts):
+                    if limit_hit:
+                        break
+
                     if progress_callback:
                         await progress_callback(f"📝 `{i+1}/{len(prompts)}`: `{prompt[:40]}...`")
 
@@ -501,7 +527,7 @@ async def submit_bulk(prompts, image_size="1:1", retry=5, progress_callback=None
 
                         ta = await find_visible(page, PROMPT_SELECTORS, timeout=5000)
                         if not ta:
-                            results.append({"success": False, "error": "Prompt input not found"})
+                            results.append({"success": False, "error": "Prompt not found"})
                             continue
 
                         await ta.click(click_count=3)
@@ -517,13 +543,21 @@ async def submit_bulk(prompts, image_size="1:1", retry=5, progress_callback=None
 
                         await asyncio.sleep(3)
                         image_url = await wait_for_image(page)
+
                         if image_url:
                             results.append({"success": True, "image_url": image_url, "account": name})
                             mark_success(account["_id"])
                         else:
-                            results.append({"success": False, "error": "No image"})
+                            body = await page.text_content("body") or ""
+                            reset_at = parse_limit_reset_time(body)
+                            if reset_at:
+                                mark_limited(account["_id"], reset_at)
+                                results.append({"success": False, "error": "Limit reached"})
+                                limit_hit = True
+                            else:
+                                results.append({"success": False, "error": "No image"})
 
-                        if i < len(prompts) - 1:
+                        if i < len(prompts) - 1 and not limit_hit:
                             await page.goto(IMAGES_URL, wait_until="domcontentloaded", timeout=20000)
                             await asyncio.sleep(2)
 
@@ -531,89 +565,102 @@ async def submit_bulk(prompts, image_size="1:1", retry=5, progress_callback=None
                         results.append({"success": False, "error": str(e)[:60]})
 
                 return results
+
             finally:
                 if ctx:
                     try:
                         await ctx.close()
                     except:
                         pass
-                await _refresh_storage(session)
 
         return [{"success": False, "error": "All accounts exhausted"} for _ in prompts]
 
 
+# ── Session check ──
+
 async def check_session():
-    """Check all accounts using their persistent browser master context."""
-    async with _browsers_lock:
-        docs = Account.get_all()
-        print(f"[worker] check_session: {len(docs)} accounts")
-        expired = []
-        for d in docs:
-            label = d.get("label", "?")
-            if d.get("expired"):
-                name = d.get("profile_name") or label
-                expired.append({"label": label, "profile_name": name, "deleted": True})
-                accounts_col.delete_one({"_id": d["_id"]})
-                if d["_id"] in _browsers:
-                    try:
-                        await _browsers[d["_id"]]["browser"].close()
-                    except:
-                        pass
-                    del _browsers[d["_id"]]
-                continue
+    docs = Account.get_all()
+    print(f"[worker] check_session: {len(docs)} accounts")
+    expired = []
+    for d in docs:
+        label = d.get("label", "?")
+        if d.get("expired"):
+            name = d.get("profile_name") or label
+            expired.append({"label": label, "profile_name": name, "deleted": True})
+            accounts_col.delete_one({"_id": d["_id"]})
+            continue
 
-            aid = d["_id"]
-            session = _browsers.get(aid)
-            if not session:
-                print(f"[worker] check_session: {label} no persistent browser, launching temp check...")
-                try:
-                    p, browser = await _launch_browser()
-                    ctx = await _new_context(browser)
-                    page = await ctx.new_page()
-                    await stealth_async(page)
-                    cookies = fix_samesite(d.get("cookies", []))
-                    await ctx.add_cookies(cookies)
-                    await page.goto(CHATGPT_URL, wait_until="networkidle", timeout=45000)
-                    await asyncio.sleep(5)
-                    if LOGIN_URL in page.url:
-                        name = d.get("profile_name") or label
-                        expired.append({"label": label, "profile_name": name, "deleted": True})
-                        accounts_col.delete_one({"_id": d["_id"]})
-                    await browser.close()
-                except Exception as e:
-                    print(f"[worker] check_session: {label} temp error — {e}")
-                    if browser:
-                        try:
-                            await browser.close()
-                        except:
-                            pass
-                continue
+        aid = d["_id"]
+        is_current = _master["account"] and _master["account"]["_id"] == aid
 
+        if is_current and _master["page"]:
             try:
-                page = await session["master_ctx"].new_page()
+                page = await _master["ctx"].new_page()
                 await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=20000)
                 await asyncio.sleep(3)
                 if LOGIN_URL in page.url:
-                    print(f"[worker] check_session: {label} EXPIRED via persistent browser")
+                    print(f"[worker] check_session: {label} EXPIRED")
                     name = d.get("profile_name") or label
                     expired.append({"label": label, "profile_name": name, "deleted": True})
                     accounts_col.delete_one({"_id": d["_id"]})
-                    try:
-                        await session["browser"].close()
-                    except:
-                        pass
-                    del _browsers[aid]
+                    await close_browser()
                 else:
                     print(f"[worker] check_session: {label} OK")
-                    _refresh_storage(session)
+                    storage = await _master["ctx"].storage_state()
+                    _master["storage_state"] = storage
                 await page.close()
+                continue
             except Exception as e:
                 print(f"[worker] check_session: {label} error — {e}")
-                try:
-                    await session["browser"].close()
-                except:
-                    pass
-                del _browsers[aid]
+                await close_browser()
 
-        print(f"[worker] check_session done: {len(expired)} expired")
-        return expired
+        # Not current account — launch temp browser
+        try:
+            p, browser = None, None
+            try:
+                p = await async_playwright().start()
+                browser = await p.chromium.launch(
+                    headless=True, args=["--no-sandbox", "--single-process"]
+                )
+                ctx = await browser.new_context(
+                    viewport={"width": 1280, "height": 800},
+                    user_agent=USER_AGENT,
+                )
+                page = await ctx.new_page()
+                await stealth_async(page)
+                cookies = fix_samesite(d.get("cookies", []))
+                await ctx.add_cookies(cookies)
+                await page.goto(CHATGPT_URL, wait_until="networkidle", timeout=45000)
+                await asyncio.sleep(5)
+                if LOGIN_URL in page.url:
+                    name = d.get("profile_name") or label
+                    expired.append({"label": label, "profile_name": name, "deleted": True})
+                    accounts_col.delete_one({"_id": d["_id"]})
+                await browser.close()
+            finally:
+                if browser:
+                    try:
+                        await browser.close()
+                    except:
+                        pass
+                if p:
+                    try:
+                        await p.stop()
+                    except:
+                        pass
+        except Exception as e:
+            print(f"[worker] check_session: {label} temp error — {e}")
+
+    print(f"[worker] check_session done: {len(expired)} expired")
+    return expired
+
+
+# ── Background init (lazy — just ensures browser is ready) ──
+
+async def init_browser_background():
+    """Lazy init: just make sure the persistent browser process exists."""
+    try:
+        await ensure_browser()
+        print("[worker] Background browser init complete")
+    except Exception as e:
+        print(f"[worker] Background browser init error: {e}")

@@ -725,20 +725,46 @@ async def process_queue():
 
                 from worker import submit_bulk
                 results = await submit_bulk(prompts, image_size=image_size, progress_callback=bulk_cb)
+                processed = len(results)
                 success_count = sum(1 for r in results if r.get("success"))
                 fail_count = sum(1 for r in results if not r.get("success"))
                 Queue.update_status(qid, Queue.STATUS_DONE if fail_count == 0 else Queue.STATUS_FAIL)
-                if progress_msg:
+
+                summary = (
+                    f"{SEP}\n{center('✅ Bulk Complete')}\n{SEP}\n\n"
+                    f"  • ✅ Success: `{success_count}`\n"
+                    f"  • ❌ Failed: `{fail_count}`\n"
+                    f"  • 📐 Size: `{image_size}`"
+                )
+
+                # Remaining prompts due to limit hit
+                remaining_prompts = prompts[processed:] if processed < len(prompts) else []
+                if remaining_prompts:
+                    remaining_file = io.BytesIO("\n\n".join(remaining_prompts).encode())
+                    remaining_file.name = f"remaining-{len(remaining_prompts)}-prompts.txt"
                     try:
-                        await progress_msg.edit_text(
-                            f"{SEP}\n{center('✅ Bulk Complete')}\n{SEP}\n\n"
-                            f"  • ✅ Success: `{success_count}`\n"
-                            f"  • ❌ Failed: `{fail_count}`\n"
-                            f"  • 📐 Size: `{image_size}`",
-                            parse_mode="Markdown"
+                        from telegram import Bot
+                        bot = Bot(config.BOT_TOKEN)
+                        await bot.send_document(
+                            chat_id=user_id,
+                            document=remaining_file,
+                            caption=(
+                                f"{SEP}\n{center('📄 Remaining Prompts')}\n{SEP}\n\n"
+                                f"⏳ Limit reached after `{processed}/{len(prompts)}`\n\n"
+                                f"📁 Re-share this file to continue from where you left off."
+                            ),
+                            parse_mode="Markdown",
                         )
                     except Exception:
                         pass
+                    summary += f"\n  • 📁 Remaining: `{len(remaining_prompts)}` prompts saved to file"
+
+                if progress_msg:
+                    try:
+                        await progress_msg.edit_text(summary, parse_mode="Markdown")
+                    except Exception:
+                        pass
+
                 for i, r in enumerate(results):
                     if r.get("success") and r.get("image_url"):
                         await send_image_to_user({
