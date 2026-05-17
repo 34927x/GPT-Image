@@ -14,7 +14,7 @@ from accounts.manager import (is_admin, export_accounts, import_accounts,
 from worker import submit_prompt, close as close_worker, check_session
 from ui import (box, error_box, menu_header, queue_box, progress_box,
                 result_box, status_box, accounts_box, queued_box, help_box,
-                image_caption, SEP, DIV, END)
+                image_caption, center, SEP, DIV, END)
 
 queue_semaphore = asyncio.Semaphore(1)
 
@@ -31,42 +31,41 @@ async def safe_edit(msg, *args, **kwargs):
 
 def main_menu(user_id: int = None):
     kb = [
-        [InlineKeyboardButton("🎨 Generate", callback_data="gen")],
-        [InlineKeyboardButton("📋 Queue", callback_data="myqueue"),
+        [InlineKeyboardButton("🎨 Generate Image", callback_data="gen")],
+        [InlineKeyboardButton("📋 My Queue", callback_data="myqueue"),
          InlineKeyboardButton("📊 Status", callback_data="status")],
         [InlineKeyboardButton("👥 Accounts", callback_data="accounts"),
-         InlineKeyboardButton("❓ Help", callback_data="help")],
+         InlineKeyboardButton("📖 Guide", callback_data="help")],
     ]
     if user_id and is_admin(user_id):
-        kb.append([InlineKeyboardButton("⚙️ Admin", callback_data="admin")])
+        kb.append([InlineKeyboardButton("⚙️ Admin Panel", callback_data="admin")])
     return InlineKeyboardMarkup(kb)
 
 def admin_menu():
     kb = [
-        [InlineKeyboardButton("➕ Add", callback_data="add_account")],
-        [InlineKeyboardButton("📦 Export", callback_data="export"),
-         InlineKeyboardButton("📥 Import", callback_data="import_prompt")],
-        [InlineKeyboardButton("🔄 Check", callback_data="check_sessions"),
-         InlineKeyboardButton("⏰ Reset", callback_data="reset_limits")],
-        [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
+        [InlineKeyboardButton("➕ Add Account", callback_data="add_account"),
+         InlineKeyboardButton("📦 Export", callback_data="export")],
+        [InlineKeyboardButton("📥 Import", callback_data="import_prompt"),
+         InlineKeyboardButton("🔄 Check", callback_data="check_sessions")],
+        [InlineKeyboardButton("⏰ Reset Limits", callback_data="reset_limits"),
+         InlineKeyboardButton("🔙 Back", callback_data="back_main")],
     ]
     return InlineKeyboardMarkup(kb)
 
 def size_menu():
     kb = [
-        [InlineKeyboardButton("⬜ 1:1", callback_data="size_1:1"),
-         InlineKeyboardButton("🖥️ 16:9", callback_data="size_16:9")],
-        [InlineKeyboardButton("📱 9:16", callback_data="size_9:16"),
-         InlineKeyboardButton("📺 4:3", callback_data="size_4:3")],
-        [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
+        [InlineKeyboardButton("⬜ 1:1 Square", callback_data="size_1:1"),
+         InlineKeyboardButton("🖥️ 16:9 Wide", callback_data="size_16:9")],
+        [InlineKeyboardButton("📱 9:16 Phone", callback_data="size_9:16"),
+         InlineKeyboardButton("📺 4:3 Classic", callback_data="size_4:3")],
+        [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_main")],
     ]
     return InlineKeyboardMarkup(kb)
 
 def bulk_menu(prompt, image_size):
-    # Prompt stored in user_data, only send size+count in callback (64-byte Telegram limit)
     kb = [
-        [InlineKeyboardButton("1️⃣ Single Image", callback_data=f"b_{image_size}_1"),
-         InlineKeyboardButton("2️⃣ Double Pack", callback_data=f"b_{image_size}_2")],
+        [InlineKeyboardButton("1️⃣ Single", callback_data=f"b_{image_size}_1"),
+         InlineKeyboardButton("2️⃣ Double", callback_data=f"b_{image_size}_2")],
         [InlineKeyboardButton("4️⃣ Quad Pack", callback_data=f"b_{image_size}_4")],
         [InlineKeyboardButton("🔙 Back", callback_data="gen")],
     ]
@@ -76,25 +75,24 @@ def bulk_menu(prompt, image_size):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "🤖 *🎨 Welcome to GPT Image Bot!* 🎨\n"
-        "─────────────────────\n\n"
-        "━━ 🚀 *How It Works* ━━\n"
-        "   • 📝 Send any text → AI generates image\n"
-        "   • 📁 Upload `.txt` file → Bulk processing\n"
-        "   • 🖼️ Images delivered right in this chat\n"
-        "   • 🔄 Multi-account auto-failover\n\n"
-        "━━ 📋 *Quick Start* ━━\n"
-        "   • ✏️ Just type what you want to see\n"
-        "   • 📐 Choose aspect ratio when prompted\n"
-        "   • 🔢 Select count (1 / 2 / 4 images)\n"
-        "   • ✅ Done! Image will appear here\n\n"
-        "━━ 💡 *Tips* ━━\n"
-        "   • 🎨 Be descriptive for best results\n"
-        "   • 📄 Separate prompts by blank line in `.txt`\n"
-        "   • 📊 Use /menu for full options\n\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "─────────────────────"
+        f"{SEP}\n"
+        f"{center('🎨 Welcome to GPT Image Bot!')}\n"
+        f"{DIV}\n\n"
+        f"🚀 *How It Works*\n"
+        f"  • 📝 Send any text → AI generates image\n"
+        f"  • 📁 Upload `.txt` file → Bulk processing\n"
+        f"  • 🖼️ Images delivered right in this chat\n"
+        f"  • 🔄 Multi-account auto-failover\n\n"
+        f"📋 *Quick Start*\n"
+        f"  • ✏️ Just type what you want to see\n"
+        f"  • 📐 Choose aspect ratio when prompted\n"
+        f"  • 🔢 Select count (1 / 2 / 4 images)\n"
+        f"  • ✅ Done! Image will appear here\n\n"
+        f"💡 *Tips*\n"
+        f"  • 🎨 Be descriptive for best results\n"
+        f"  • 📄 Separate prompts by blank line in `.txt`\n"
+        f"  • 📊 Use /menu for full options\n\n"
+        f"{END}"
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=main_menu(update.effective_user.id))
 
@@ -462,22 +460,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         icon = {"pending": "⏳", "processing": "🔄", "done": "✅", "fail": "❌"}
         lines = [
             SEP,
-            "📋 *Your Queue*",
+            center("📋 Your Queue"),
             DIV,
-            f"   • 📊 *Total:* {len(items)} item(s)",
+            f"  • 📊 *Total:* {len(items)} item(s)",
             "",
         ]
         for item in items[-15:]:
             si = icon.get(item["status"], "❓")
             p = item["prompt"][:30]
             batch = f" ({item.get('batch_index',0)+1}/{item.get('batch_total',1)})" if item.get('batch_total',1) > 1 else ""
-            lines.append(f"   • {si} `{p}`{batch}")
+            lines.append(f"  • {si} `{p}`{batch}")
         lines += [
             "",
-            SEP,
-            "━━ 📌 *Status Guide* ━━",
-            "   ⏳ Pending    🔄 Processing",
-            "   ✅ Done       ❌ Failed",
+            DIV,
+            "📌 *Status Guide*",
+            "  ⏳ Pending    🔄 Processing",
+            "  ✅ Done       ❌ Failed",
             END,
             "_🤖 Powered by @TurabCoder_",
         ]
@@ -529,21 +527,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "admin" and is_adm:
         text = (
-            "━━━━━━━━━━━━━━━━━━━\n"
-            "⚙️ *Admin Control Panel* ⚙️\n"
-            "─────────────────────\n\n"
-            "━━ 📋 *Available Actions* ━━\n"
-            "   • ➕ Add Account — Paste cookies JSON\n"
-            "   • 📦 Export — Download all accounts\n"
-            "   • 📥 Import — Upload accounts JSON\n"
-            "   • 🔄 Check Sessions — Validate all\n"
-            "   • ⏰ Reset Limits — Restore limited accts\n\n"
-            "━━ ⚙️ *Auto-Systems* ━━\n"
-            "   • 🔄 Session check: Every 30 minutes\n"
-            "   • ⏰ Limit reset: Every 5 minutes\n"
-            "   • 📬 Notifications sent here\n\n"
-            "━━━━━━━━━━━━━━━━━━━\n"
-            "─────────────────────"
+            f"{SEP}\n"
+            f"{center('⚙️ Admin Control Panel')}\n"
+            f"{DIV}\n\n"
+            f"📋 *Available Actions*\n"
+            f"  • ➕ Add Account — Paste cookies JSON\n"
+            f"  • 📦 Export — Download all accounts\n"
+            f"  • 📥 Import — Upload accounts JSON\n"
+            f"  • 🔄 Check Sessions — Validate all\n"
+            f"  • ⏰ Reset Limits — Restore limited accts\n\n"
+            f"⚙️ *Auto-Systems*\n"
+            f"  • 🔄 Session check: Every 30 minutes\n"
+            f"  • ⏰ Limit reset: Every 5 minutes\n"
+            f"  • 📬 Notifications sent here\n\n"
+            f"{END}"
         )
         await safe_edit(query.message,text, parse_mode="Markdown", reply_markup=admin_menu())
         return
@@ -602,21 +599,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "add_account" and is_adm:
         context.user_data["awaiting_account_json"] = True
         text = (
-            "━━━━━━━━━━━━━━━━━━━\n"
-            "➕ *Add New Account* ➕\n"
-            "─────────────────────\n\n"
-            "━━ 📋 *Instructions* ━━\n\n"
-            "   • 📋 Paste cookies JSON from Chrome extension\n"
-            "   • 📝 Format:\n"
-            "      `[{\"name\":\"...\",\"value\":\"...\",...}]`\n\n"
-            "━━ 🔖 *Custom Label (Optional)* ━━\n\n"
-            "   • `MyName | [{\"name\"...}]`\n\n"
-            "━━ ⚠️ *Important* ━━\n"
-            "   • 🔐 Keep cookies private\n"
-            "   • 🔄 Same label = auto-update\n"
-            "   • ❌ Invalid JSON will be rejected\n"
-            "━━━━━━━━━━━━━━━━━━━\n"
-            "─────────────────────"
+            f"{SEP}\n"
+            f"{center('➕ Add New Account')}\n"
+            f"{DIV}\n\n"
+            f"📋 *Instructions*\n\n"
+            f"  • 📋 Paste cookies JSON from Chrome extension\n"
+            f"  • 📝 Format:\n"
+            f"     `[{{\"name\":\"...\",\"value\":\"...\",...}}]`\n\n"
+            f"🔖 *Custom Label (Optional)*\n\n"
+            f"  • `MyName | [{{\"name\"...}}]`\n\n"
+            f"⚠️ *Important*\n"
+            f"  • 🔐 Keep cookies private\n"
+            f"  • 🔄 Same label = auto-update\n"
+            f"  • ❌ Invalid JSON will be rejected\n"
+            f"{END}"
         )
         await safe_edit(query.message,text, parse_mode="Markdown", reply_markup=admin_menu())
         return
@@ -636,20 +632,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ses = get_session_status()
         lines = [
             SEP,
-            "✅ *Session Check Complete* ✅",
+            center("✅ Session Check Complete"),
             DIV,
-            f"   • 🔄 Limits Reset: `{n}` account(s)",
+            f"  • 🔄 Limits Reset: `{n}` account(s)",
             "",
-            "━━ 📋 *Account Status Report* ━━",
+            DIV,
+            "📋 *Account Status Report*",
         ]
         for s in ses:
-            lines.append(f"   • {s}")
+            lines.append(f"  • {s}")
         lines += [
             "",
-            SEP,
-            "━━ 📌 *Status Legend* ━━",
-            "   ✅ Active    ❌ Expired",
-            "   ⏳ Limited   ⚠️ Errors",
+            DIV,
+            "📌 *Legend*",
+            "  ✅ Active    ❌ Expired",
+            "  ⏳ Limited   ⚠️ Errors",
             END,
             "_🤖 Powered by @TurabCoder_",
         ]
@@ -663,19 +660,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ses = get_session_status()
         lines = [
             SEP,
-            "⏰ *Limit Reset Complete* 🔄",
+            center("⏰ Limit Reset Complete"),
             DIV,
-            f"   • 🔄 Restored: `{n}` account(s)",
+            f"  • 🔄 Restored: `{n}` account(s)",
             "",
-            "━━ 📋 *Current Status* ━━",
+            DIV,
+            "📋 *Current Status*",
         ]
         for s in ses:
-            lines.append(f"   • {s}")
+            lines.append(f"  • {s}")
         lines += [
-            SEP,
-            "━━ 📌 *Legend* ━━",
-            "   ✅ Active    ❌ Expired",
-            "   ⏳ Limited   ⚠️ Errors",
+            DIV,
+            "📌 *Legend*",
+            "  ✅ Active    ❌ Expired",
+            "  ⏳ Limited   ⚠️ Errors",
             END,
             "_🤖 Powered by @TurabCoder_",
         ]
