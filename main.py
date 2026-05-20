@@ -9,12 +9,12 @@ from telegram.error import BadRequest
 from telegram.ext import (Application, CommandHandler, MessageHandler,
                           CallbackQueryHandler, filters, ContextTypes)
 
+import aiohttp as _aiohttp
 import config
 from config import init_db, queue_col, accounts_col, Queue, Account
-from worker import (submit_prompt, submit_bulk, check_session, is_admin, 
-                   export_accounts, import_accounts, get_session_status, 
-                   mark_expired, add_manual_account, reset_limited_accounts, 
-                   parse_limit_reset_time, init_browser_background)
+from worker import (is_admin, export_accounts, import_accounts,
+                   get_session_status, mark_expired,
+                   reset_limited_accounts, parse_limit_reset_time)
 
 
 # --- BOT HANDLERS & UI ---
@@ -255,10 +255,6 @@ def image_caption(prompt, batch_info=""):
 
 
 # --- BOT HANDLERS ---
-
-import config
-from config import Account, Queue, init_db
-from worker import submit_prompt, submit_bulk, check_session, is_admin, export_accounts, import_accounts, get_session_status, mark_expired, add_manual_account, reset_limited_accounts, parse_limit_reset_time
 
 queue_semaphore = asyncio.Semaphore(1)
 
@@ -856,13 +852,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(query.message,
             box("🔄 Sessions",
                 "━━ 🔄 *Checking All Sessions* ━━\n\n"
-                "   • 🔍 Validating account cookies...\n"
-                "   • ⏰ Checking limit timers...\n"
-                "   • ⏳ Please wait, this may take a moment",
+                "   • 🔍 Checking account status...\\n"
+                "   • ⏰ Checking limit timers...\\n"
+                "   • ⏳ Please wait...",
                 emoji="🔄"),
             parse_mode="Markdown"
         )
-        await check_session()
+        # No Playwright on Heroku — just reset limits and show DB status
         n = reset_limited_accounts()
         ses = get_session_status()
         lines = [
@@ -919,6 +915,40 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(query.message,menu_header(), parse_mode="Markdown", reply_markup=main_menu(user_id))
         return
 
+# ── Remote Worker HTTP Helpers ──
+
+async def call_remote_worker(endpoint, payload, timeout=300):
+    """Call the local Chromium worker via HTTP."""
+    url = f"{config.WORKER_URL}{endpoint}"
+    headers = {"X-Worker-Secret": config.WORKER_SECRET, "Content-Type": "application/json"}
+    try:
+        async with _aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers,
+                                    timeout=_aiohttp.ClientTimeout(total=timeout)) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                else:
+                    text = await resp.text()
+                    return {"success": False, "error": f"Worker HTTP {resp.status}: {text[:100]}"}
+    except _aiohttp.ClientError as e:
+        return {"success": False, "error": f"Worker unreachable: {str(e)[:80]}"}
+    except asyncio.TimeoutError:
+        return {"success": False, "error": "Worker timeout (image generation took too long)"}
+
+async def check_worker_health():
+    """Check if the local worker is alive."""
+    url = f"{config.WORKER_URL}/health"
+    headers = {"X-Worker-Secret": config.WORKER_SECRET}
+    try:
+        async with _aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers,
+                                   timeout=_aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+    except Exception:
+        pass
+    return None
+
 # ── Queue Processor ──
 
 async def process_queue():
@@ -947,7 +977,7 @@ async def process_queue():
                         f"{SEP}\n\n"
                         f"  • 📄 Total: `{len(prompts)}` prompts\n"
                         f"  • 📐 Size: `{image_size}`\n\n"
-                        f"⏳ Processing..."
+                        f"⏳ Sending to worker..."
                     )
                     progress_msg = await bot.send_message(
                         chat_id=user_id, text=msg, parse_mode="Markdown"
@@ -955,22 +985,15 @@ async def process_queue():
                 except Exception:
                     pass
 
-                async def bulk_cb(msg: str):
-                    if progress_msg:
-                        try:
-                            await progress_msg.edit_text(
-                                f"{SEP}\n{center('📁 Bulk Processing')}\n{SEP}\n\n"
-                                f"  • 📄 Total: `{len(prompts)}` prompts\n"
-                                f"  • 📐 Size: `{image_size}`\n\n"
-                                f"  {msg}",
-                                parse_mode="Markdown"
-                            )
-                        except Exception:
-                            pass
+                # Call remote worker for bulk
+                resp = await call_remote_worker("/process-bulk", {
+                    "prompts": prompts, "image_size": image_size
+                }, timeout=len(prompts) * 180)
 
-                from worker import submit_bulk
-                results = await submit_bulk(prompts, image_size=image_size, progress_callback=bulk_cb)
-                processed = len(results)
+                results = resp.get("results", [])
+                if not results and resp.get("error"):
+                    results = [{"success": False, "error": resp["error"]} for _ in prompts]
+
                 success_count = sum(1 for r in results if r.get("success"))
                 fail_count = sum(1 for r in results if not r.get("success"))
                 Queue.update_status(qid, Queue.STATUS_DONE if fail_count == 0 else Queue.STATUS_FAIL)
@@ -981,28 +1004,6 @@ async def process_queue():
                     f"  • ❌ Failed: `{fail_count}`\n"
                     f"  • 📐 Size: `{image_size}`"
                 )
-
-                # Remaining prompts due to limit hit
-                remaining_prompts = prompts[processed:] if processed < len(prompts) else []
-                if remaining_prompts:
-                    remaining_file = io.BytesIO("\n\n".join(remaining_prompts).encode())
-                    remaining_file.name = f"remaining-{len(remaining_prompts)}-prompts.txt"
-                    try:
-                        from telegram import Bot
-                        bot = Bot(config.BOT_TOKEN)
-                        await bot.send_document(
-                            chat_id=user_id,
-                            document=remaining_file,
-                            caption=(
-                                f"{SEP}\n{center('📄 Remaining Prompts')}\n{SEP}\n\n"
-                                f"⏳ Limit reached after `{processed}/{len(prompts)}`\n\n"
-                                f"📁 Re-share this file to continue from where you left off."
-                            ),
-                            parse_mode="Markdown",
-                        )
-                    except Exception:
-                        pass
-                    summary += f"\n  • 📁 Remaining: `{len(remaining_prompts)}` prompts saved to file"
 
                 if progress_msg:
                     try:
@@ -1030,26 +1031,26 @@ async def process_queue():
                 bot = Bot(config.BOT_TOKEN)
                 batch_info = f" ({batch_idx+1}/{batch_total})" if batch_total > 1 else ""
                 msg = queue_box(prompt, image_size, batch_info)
-                msg += "\n\n⏳ Starting..."
+                msg += "\n\n⏳ Sending to worker..."
                 progress_msg = await bot.send_message(
                     chat_id=user_id, text=msg, parse_mode="Markdown"
                 )
             except Exception:
                 pass
 
-            async def progress_callback(msg: str):
-                nonlocal progress_msg
-                if progress_msg:
-                    try:
-                        batch_info = f" ({batch_idx+1}/{batch_total})" if batch_total > 1 else ""
-                        text = progress_box(prompt, msg, batch_info)
-                        await progress_msg.edit_text(text, parse_mode="Markdown")
-                    except Exception:
-                        pass
+            # Update progress
+            if progress_msg:
+                try:
+                    batch_info = f" ({batch_idx+1}/{batch_total})" if batch_total > 1 else ""
+                    text = progress_box(prompt, "🔄 Processing on local worker...", batch_info)
+                    await progress_msg.edit_text(text, parse_mode="Markdown")
+                except Exception:
+                    pass
 
-            result = await submit_prompt(
-                prompt, image_size=image_size, progress_callback=progress_callback
-            )
+            # Call remote worker
+            result = await call_remote_worker("/process", {
+                "prompt": prompt, "image_size": image_size
+            })
 
             if result.get("success") and result.get("image_url"):
                 Queue.update_status(qid, Queue.STATUS_DONE, image_url=result["image_url"])
@@ -1127,10 +1128,8 @@ async def status_command(update, context):
     )
 
 
+
 # --- FASTAPI & LIFESPAN ---
-import config
-from config import init_db, queue_col, accounts_col, Queue, Account
-from worker import reset_limited_accounts, init_browser_background
 
 telegram_app = None
 API_KEY = os.getenv("API_KEY", "")
@@ -1162,7 +1161,13 @@ async def lifespan(app: FastAPI):
 
     session_task = asyncio.create_task(session_check_loop())
     limit_task = asyncio.create_task(limit_reset_loop())
-    # asyncio.create_task(init_browser_background())
+
+    # Check if local worker is reachable
+    health = await check_worker_health()
+    if health:
+        print(f"[main] Local worker connected ✅ — {health.get('accounts_available', '?')} accounts available")
+    else:
+        print(f"[main] ⚠️ Local worker not reachable at {config.WORKER_URL} — images will fail until worker is started")
 
     # Process any pending queue items from before restart
     if queue_count > 0:
@@ -1260,8 +1265,7 @@ async def api_status():
 async def api_generate(prompt: str = "", image_size: str = "1:1"):
     if not prompt:
         return {"success": False, "error": "Missing prompt"}
-    from worker import submit_prompt
-    result = await submit_prompt(prompt, image_size)
+    result = await call_remote_worker("/process", {"prompt": prompt, "image_size": image_size})
     return result
 
 @app.post("/api/cookies")
