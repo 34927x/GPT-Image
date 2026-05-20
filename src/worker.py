@@ -192,6 +192,18 @@ async def ensure_prompt_visible(p):
                         pass
         except:
             pass
+            
+    # Diagnostics before returning False
+    title = ""
+    try:
+        title = await p.title()
+    except:
+        pass
+    print(f"[worker] ensure_prompt_visible failed: url={p.url} title='{title}'")
+    if "cloudflare" in body.lower() or "turnstile" in body.lower() or "checking your browser" in body.lower() or "verify you are human" in body.lower() or "verify is you are human" in body.lower():
+        print("[worker] CLOUDFLARE TURNSTILE/CHALLENGE PAGE DETECTED!")
+    else:
+        print(f"[worker] Body snippet: {body[:400].replace('\n', ' ').strip()}")
     return False
 
 
