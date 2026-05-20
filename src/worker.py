@@ -854,3 +854,37 @@ async def init_browser_background():
         print("[worker] Background browser init complete")
     except Exception as e:
         print(f"[worker] Background browser init error: {e}")
+
+
+if __name__ == "__main__":
+    import sys
+    from dotenv import load_dotenv
+    
+    # Load env variables from root .env file
+    dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    load_dotenv(dotenv_path)
+    
+    from db import init_db
+    
+    async def run_manual_test():
+        # Setup paths so we can import config correctly
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        
+        # Connect to MongoDB
+        await init_db()
+        
+        # Parse command line argument for prompt
+        prompt = "a cute red panda eating bamboo, high resolution"
+        if len(sys.argv) > 1:
+            prompt = " ".join(sys.argv[1:])
+            
+        print(f"🚀 Running manual worker test for prompt: '{prompt}'")
+        # Run headfully for local visibility
+        os.environ["DEBUG"] = "true"
+        
+        # Trigger the generation
+        result = await submit_prompt(prompt, image_size="1:1")
+        print("\n✨ Test Result:")
+        print(result)
+        
+    asyncio.run(run_manual_test())
