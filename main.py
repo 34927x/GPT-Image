@@ -12,7 +12,7 @@ from telegram.ext import (Application, CommandHandler, MessageHandler,
 import aiohttp as _aiohttp
 import config
 from config import init_db, queue_col, accounts_col, Queue, Account
-from worker import (is_admin, export_accounts, import_accounts,
+from utils.worker_utils import (is_admin, export_accounts, import_accounts,
                    get_session_status, mark_expired,
                    reset_limited_accounts, parse_limit_reset_time)
 
