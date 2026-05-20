@@ -203,7 +203,8 @@ async def ensure_prompt_visible(p):
     if "cloudflare" in body.lower() or "turnstile" in body.lower() or "checking your browser" in body.lower() or "verify you are human" in body.lower() or "verify is you are human" in body.lower():
         print("[worker] CLOUDFLARE TURNSTILE/CHALLENGE PAGE DETECTED!")
     else:
-        print(f"[worker] Body snippet: {body[:400].replace('\n', ' ').strip()}")
+        snippet = body[:400].replace('\n', ' ').strip()
+        print(f"[worker] Body snippet: {snippet}")
     return False
 
 
