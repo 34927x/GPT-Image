@@ -442,9 +442,11 @@ async def ensure_logged_in(account, cb=None):
 async def create_guest_context():
     """Fresh isolated context from master's storage_state (guest profile)."""
     if not _master["storage_state"]:
+        print("[worker] create_guest_context failed: storage_state is empty")
         return None, None
     browser = get_browser()
     if not browser:
+        print("[worker] create_guest_context failed: browser is None")
         return None, None
     try:
         ctx = await asyncio.wait_for(browser.new_context(
@@ -454,7 +456,10 @@ async def create_guest_context():
             locale="en-US",
         ), timeout=10)
         page = await asyncio.wait_for(ctx.new_page(), timeout=10)
-    except:
+    except Exception as e:
+        print(f"[worker] create_guest_context failed: {e}")
+        import traceback
+        traceback.print_exc()
         return None, None
     await stealth_async(page)
     return ctx, page
