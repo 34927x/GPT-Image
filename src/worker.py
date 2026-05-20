@@ -571,6 +571,9 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                     return {"success": False, "error": "No image generated"}
 
                 except Exception as e:
+                    print(f"[worker] Exception during prompt run on {name}: {e}")
+                    import traceback
+                    traceback.print_exc()
                     mark_error(account["_id"])
                     if ctx:
                         try:
