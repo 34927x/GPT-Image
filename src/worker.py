@@ -166,7 +166,36 @@ def display_name(account):
     return account.get("profile_name") or account.get("label", "Account")
 
 
+async def wait_for_cloudflare(p, max_wait=15):
+    for attempt in range(max_wait):
+        title = ""
+        try:
+            title = await p.title()
+        except:
+            pass
+        body = ""
+        try:
+            body = await p.text_content("body") or ""
+        except:
+            pass
+        
+        is_cf = ("just a moment" in title.lower() or 
+                 "cloudflare" in body.lower() or 
+                 "turnstile" in body.lower() or 
+                 "checking your browser" in body.lower() or 
+                 "verify you are human" in body.lower() or 
+                 "verify is you are human" in body.lower())
+        
+        if not is_cf:
+            return True
+            
+        print(f"[worker] Cloudflare challenge active (title='{title}'), waiting 1s... (attempt {attempt+1}/{max_wait})")
+        await asyncio.sleep(1)
+    return False
+
+
 async def ensure_prompt_visible(p):
+    await wait_for_cloudflare(p)
     body = await p.text_content("body") or ""
     if LOGIN_URL in p.url:
         return False
@@ -393,7 +422,8 @@ async def login_account(account, cb=None):
         await ctx.close()
         return False
     print(f"[worker] LOGIN step7 done: url={page.url[:60]}")
-    await asyncio.sleep(5)
+    await wait_for_cloudflare(page)
+    await asyncio.sleep(2)
 
     if LOGIN_URL in page.url:
         print(f"[worker] LOGIN FAILED: {label} expired")

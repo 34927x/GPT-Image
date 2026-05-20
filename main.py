@@ -219,3 +219,12 @@ async def refresh_cookies(label: str):
         {"$set": {"expired": False, "limited": False, "limit_reset_at": None, "limit_hit_at": None, "error_count": 0}}
     )
     return {"success": True}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    # Enable headful mode locally when running directly
+    os.environ["DEBUG"] = "true"
+    print("🚀 Starting GPT-Image-Bot locally...")
+    print("💡 Browser will open automatically (DEBUG=true)")
+    uvicorn.run("main:app", host="127.0.0.1", port=8080, reload=True)
