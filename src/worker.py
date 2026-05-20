@@ -166,6 +166,30 @@ def display_name(account):
     return account.get("profile_name") or account.get("label", "Account")
 
 
+async def try_click_turnstile(p):
+    try:
+        for frame in p.frames:
+            if "challenges.cloudflare.com" in frame.url:
+                el = await frame.query_selector("input[type='checkbox']")
+                if el:
+                    await el.click()
+                    print("[worker] Clicked Cloudflare Turnstile checkbox input")
+                    return True
+                el = await frame.query_selector(".mark")
+                if el:
+                    await el.click()
+                    print("[worker] Clicked Cloudflare Turnstile mark class")
+                    return True
+                el = await frame.query_selector("#challenge-stage")
+                if el:
+                    await el.click()
+                    print("[worker] Clicked Cloudflare Turnstile challenge-stage")
+                    return True
+    except Exception as e:
+        print(f"[worker] Turnstile click attempt error: {e}")
+    return False
+
+
 async def wait_for_cloudflare(p, max_wait=15):
     for attempt in range(max_wait):
         title = ""
@@ -190,6 +214,7 @@ async def wait_for_cloudflare(p, max_wait=15):
             return True
             
         print(f"[worker] Cloudflare challenge active (title='{title}'), waiting 1s... (attempt {attempt+1}/{max_wait})")
+        await try_click_turnstile(p)
         await asyncio.sleep(1)
     return False
 
