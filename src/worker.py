@@ -433,36 +433,15 @@ async def login_account(account, cb=None):
 
 async def ensure_logged_in(account, cb=None):
     """Make sure master context is logged into the given account."""
-    current_id = _master["account"]["_id"] if _master["account"] else None
+    browser = get_browser()
+    browser_ok = browser and browser.is_connected()
+    current_id = _master["account"]["_id"] if (_master["account"] and browser_ok) else None
     if current_id == account["_id"]:
         return True
     return await login_account(account, cb=cb)
 
 
-async def create_guest_context():
-    """Fresh isolated context from master's storage_state (guest profile)."""
-    if not _master["storage_state"]:
-        print("[worker] create_guest_context failed: storage_state is empty")
-        return None, None
-    browser = get_browser()
-    if not browser:
-        print("[worker] create_guest_context failed: browser is None")
-        return None, None
-    try:
-        ctx = await asyncio.wait_for(browser.new_context(
-            storage_state=_master["storage_state"],
-            viewport={"width": 1280, "height": 800},
-            user_agent=USER_AGENT,
-            locale="en-US",
-        ), timeout=10)
-        page = await asyncio.wait_for(ctx.new_page(), timeout=10)
-    except Exception as e:
-        print(f"[worker] create_guest_context failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return None, None
-    await stealth_async(page)
-    return ctx, page
+# create_guest_context removed as we use the master context directly to optimize memory usage
 
 
 # ── Submit prompt ──
@@ -506,12 +485,9 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
 
                 await _pc(progress_callback, f"✅ Logged in as `{name}`")
 
-                ctx, page = None, None
                 try:
-                    ctx, page = await create_guest_context()
-                    if not ctx:
-                        await _pc(progress_callback, "⚠️ Failed to create guest context")
-                        continue
+                    ctx = _master["ctx"]
+                    page = _master["page"]
 
                     await page.goto(IMAGES_URL, wait_until="domcontentloaded", timeout=20000)
                     await asyncio.sleep(3)
@@ -519,14 +495,12 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
 
                     if not await ensure_prompt_visible(page):
                         print(f"[worker] Prompt not visible for {name}")
-                        await ctx.close()
                         mark_error(account["_id"])
                         await _pc(progress_callback, "⚠️ Prompt input not found")
                         continue
 
                     ta = await find_visible(page, PROMPT_SELECTORS, timeout=5000)
                     if not ta:
-                        await ctx.close()
                         continue
 
                     await ta.click(click_count=3)
@@ -557,7 +531,6 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                                 print(f"[worker] Updated cookies saved to DB for {name}")
                         except Exception as cookie_err:
                             print(f"[worker] Failed to save updated cookies: {cookie_err}")
-                        await ctx.close()
                         await _pc(progress_callback, f"✅ Done on `{name}`")
                         return {"success": True, "image_url": image_url, "account": name}
 
@@ -565,13 +538,11 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                     reset_at = parse_limit_reset_time(body)
                     if reset_at:
                         mark_limited(account["_id"], reset_at)
-                        await ctx.close()
                         left = (reset_at - datetime.now(timezone.utc)).total_seconds()
                         h, m = int(left // 3600), int((left % 3600) // 60)
                         await _pc(progress_callback, f"⏳ `{name}` limit — resets in {h}h {m}m")
                         continue
 
-                    await ctx.close()
                     await _pc(progress_callback, "❌ No image generated")
                     return {"success": False, "error": "No image generated"}
 
@@ -580,11 +551,6 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                     import traceback
                     traceback.print_exc()
                     mark_error(account["_id"])
-                    if ctx:
-                        try:
-                            await ctx.close()
-                        except:
-                            pass
                     if progress_callback:
                         await progress_callback(f"⚠️ {str(e)[:60]}")
                     continue
@@ -619,11 +585,9 @@ async def submit_bulk(prompts, image_size="1:1", retry=5, progress_callback=None
                 if progress_callback:
                     await progress_callback(f"✅ Logged in as `{name}`")
 
-                ctx, page = None, None
                 try:
-                    ctx, page = await create_guest_context()
-                    if not ctx:
-                        continue
+                    ctx = _master["ctx"]
+                    page = _master["page"]
 
                     results = []
                     limit_hit = False
@@ -689,13 +653,9 @@ async def submit_bulk(prompts, image_size="1:1", retry=5, progress_callback=None
                             results.append({"success": False, "error": str(e)[:60]})
 
                     return results
-
-                finally:
-                    if ctx:
-                        try:
-                            await ctx.close()
-                        except:
-                            pass
+                except Exception as e:
+                    print(f"[worker] Exception during bulk run on {name}: {e}")
+                    return [{"success": False, "error": f"Exception: {str(e)[:60]}"} for _ in prompts]
 
             return [{"success": False, "error": "All accounts exhausted"} for _ in prompts]
         finally:
