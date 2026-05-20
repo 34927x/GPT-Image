@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
 
     session_task = asyncio.create_task(session_check_loop())
     limit_task = asyncio.create_task(limit_reset_loop())
-    asyncio.create_task(init_browser_background())
+    # asyncio.create_task(init_browser_background())
 
     # Process any pending queue items from before restart
     if queue_count > 0:
@@ -83,33 +83,13 @@ async def lifespan(app: FastAPI):
     await telegram_app.shutdown()
 
 async def session_check_loop():
+    print("[main] Background session checking disabled for RAM optimization")
     while True:
         try:
-            await asyncio.sleep(SESSION_CHECK_INTERVAL * 60)
-            from worker import check_session
-            expired = await check_session()
-            if expired and telegram_app:
-                for acct in expired:
-                    name = acct.get("profile_name", "Unknown")
-                    label = acct.get("label", "Unknown")
-                    msg = (
-                        f"{SEP}\n"
-                        f"{center('❌ Account Expired')}\n"
-                        f"{SEP}\n\n"
-                        f"  • 👤 Name: `{name}`\n"
-                        f"  • 🏷️ Label: `{label}`\n\n"
-                        f"🗑️ Removed from database.\n"
-                        f"🔄 Add fresh cookies via extension."
-                    )
-                    for uid in config.ADMIN_IDS:
-                        try:
-                            await telegram_app.bot.send_message(chat_id=uid, text=msg, parse_mode="Markdown")
-                        except:
-                            pass
+            await asyncio.sleep(3600)
         except asyncio.CancelledError:
             break
-        except Exception as e:
-            print(f"[session_check] Error: {e}")
+        except Exception:
             await asyncio.sleep(60)
 
 async def limit_reset_loop():

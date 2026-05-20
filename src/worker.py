@@ -55,10 +55,26 @@ PROMPT_SELECTORS = [
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 BROWSER_ARGS = [
     "--disable-blink-features=AutomationControlled",
-    "--no-sandbox", "--disable-setuid-sandbox",
-    "--disable-dev-shm-usage", "--disable-gpu",
-    "--single-process", "--disable-accelerated-2d-canvas",
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
     "--no-first-run",
+    "--no-zygote",
+    "--single-process",
+    "--js-flags=--max-old-space-size=128",  # Limit JS V8 heap to 128MB
+    "--disable-extensions",
+    "--disable-audio-output",
+    "--mute-audio",
+    "--disable-background-networking",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-breakpad",
+    "--disable-component-extensions-with-background-pages",
+    "--disable-features=Translate,BackForwardCache,AcceptCHFrame,AvoidUnnecessaryTemplates",
+    "--disable-ipc-flooding-protection",
+    "--disable-renderer-backgrounding",
+    "--metrics-recording-only",
 ]
 
 
@@ -457,106 +473,117 @@ async def _pc(progress_callback, msg):
 async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=None):
     async with worker_lock:
         print(f"[worker] submit_prompt: '{prompt[:50]}...' size={image_size}")
-        for attempt in range(retry):
-            account = get_next_account()
-            if not account:
-                await _pc(progress_callback, "❌ No valid accounts available")
-                return {"success": False, "error": "No valid accounts"}
+        try:
+            for attempt in range(retry):
+                account = get_next_account()
+                if not account:
+                    await _pc(progress_callback, "❌ No valid accounts available")
+                    return {"success": False, "error": "No valid accounts"}
 
-            if account.get("_limited_info"):
-                limited = account["accounts"]
-                names = ", ".join([a["label"] for a in limited])
-                first = limited[0]
-                h, m = first["hours_left"], first["minutes_left"]
-                err = f"⏳ All accounts limited — resets in {h}h {m}m"
-                print(f"[worker] {err}")
-                await _pc(progress_callback, f"{err} ({names})")
-                return {"success": False, "error": err, "limited_accounts": limited}
+                if account.get("_limited_info"):
+                    limited = account["accounts"]
+                    names = ", ".join([a["label"] for a in limited])
+                    first = limited[0]
+                    h, m = first["hours_left"], first["minutes_left"]
+                    err = f"⏳ All accounts limited — resets in {h}h {m}m"
+                    print(f"[worker] {err}")
+                    await _pc(progress_callback, f"{err} ({names})")
+                    return {"success": False, "error": err, "limited_accounts": limited}
 
-            name = display_name(account)
-            await _pc(progress_callback, f"🔄 Attempt {attempt+1} — `{name}`")
+                name = display_name(account)
+                await _pc(progress_callback, f"🔄 Attempt {attempt+1} — `{name}`")
 
-            logged_in = await ensure_logged_in(account, cb=progress_callback)
-            if not logged_in:
-                mark_error(account["_id"])
-                await _pc(progress_callback, f"⚠️ `{name}` login failed")
-                continue
-
-            await _pc(progress_callback, f"✅ Logged in as `{name}`")
-
-            ctx, page = None, None
-            try:
-                ctx, page = await create_guest_context()
-                if not ctx:
-                    await _pc(progress_callback, "⚠️ Failed to create guest context")
-                    continue
-
-                await page.goto(IMAGES_URL, wait_until="domcontentloaded", timeout=20000)
-                await asyncio.sleep(3)
-                await dismiss_popups(page)
-
-                if not await ensure_prompt_visible(page):
-                    print(f"[worker] Prompt not visible for {name}")
-                    await ctx.close()
+                logged_in = await ensure_logged_in(account, cb=progress_callback)
+                if not logged_in:
                     mark_error(account["_id"])
-                    await _pc(progress_callback, "⚠️ Prompt input not found")
+                    await _pc(progress_callback, f"⚠️ `{name}` login failed")
                     continue
 
-                ta = await find_visible(page, PROMPT_SELECTORS, timeout=5000)
-                if not ta:
-                    await ctx.close()
-                    continue
+                await _pc(progress_callback, f"✅ Logged in as `{name}`")
 
-                await ta.click(click_count=3)
-                await asyncio.sleep(0.3)
-                await page.keyboard.type(prompt, delay=10)
-                await asyncio.sleep(1)
+                ctx, page = None, None
+                try:
+                    ctx, page = await create_guest_context()
+                    if not ctx:
+                        await _pc(progress_callback, "⚠️ Failed to create guest context")
+                        continue
 
-                send_btn = await find_visible(page, GENERATE_BTN_SELECTORS, timeout=5000)
-                if send_btn:
-                    await send_btn.click()
-                else:
-                    await page.keyboard.press("Enter")
+                    await page.goto(IMAGES_URL, wait_until="domcontentloaded", timeout=20000)
+                    await asyncio.sleep(3)
+                    await dismiss_popups(page)
 
-                await asyncio.sleep(3)
-
-                await _pc(progress_callback, "⏳ Generating image...")
-
-                image_url = await wait_for_image(page)
-
-                if image_url:
-                    mark_success(account["_id"])
-                    print(f"[worker] IMAGE: {image_url[:80]}...")
-                    await ctx.close()
-                    await _pc(progress_callback, f"✅ Done on `{name}`")
-                    return {"success": True, "image_url": image_url, "account": name}
-
-                body = await page.text_content("body") or ""
-                reset_at = parse_limit_reset_time(body)
-                if reset_at:
-                    mark_limited(account["_id"], reset_at)
-                    await ctx.close()
-                    left = (reset_at - datetime.now(timezone.utc)).total_seconds()
-                    h, m = int(left // 3600), int((left % 3600) // 60)
-                    await _pc(progress_callback, f"⏳ `{name}` limit — resets in {h}h {m}m")
-                    continue
-
-                await ctx.close()
-                await _pc(progress_callback, "❌ No image generated")
-                return {"success": False, "error": "No image generated"}
-
-            except Exception as e:
-                mark_error(account["_id"])
-                if ctx:
-                    try:
+                    if not await ensure_prompt_visible(page):
+                        print(f"[worker] Prompt not visible for {name}")
                         await ctx.close()
-                    except:
-                        pass
-                if progress_callback:
-                    await progress_callback(f"⚠️ {str(e)[:60]}")
-                continue
+                        mark_error(account["_id"])
+                        await _pc(progress_callback, "⚠️ Prompt input not found")
+                        continue
 
-        return {"success": False, "error": "All accounts exhausted"}
+                    ta = await find_visible(page, PROMPT_SELECTORS, timeout=5000)
+                    if not ta:
+                        await ctx.close()
+                        continue
+
+                    await ta.click(click_count=3)
+                    await asyncio.sleep(0.3)
+                    await page.keyboard.type(prompt, delay=10)
+                    await asyncio.sleep(1)
+
+                    send_btn = await find_visible(page, GENERATE_BTN_SELECTORS, timeout=5000)
+                    if send_btn:
+                        await send_btn.click()
+                    else:
+                        await page.keyboard.press("Enter")
+
+                    await asyncio.sleep(3)
+
+                    await _pc(progress_callback, "⏳ Generating image...")
+
+                    image_url = await wait_for_image(page)
+
+                    if image_url:
+                        mark_success(account["_id"])
+                        print(f"[worker] IMAGE: {image_url[:80]}...")
+                        try:
+                            updated_cookies = await ctx.cookies()
+                            if updated_cookies:
+                                from db import accounts_col
+                                accounts_col.update_one({"_id": account["_id"]}, {"$set": {"cookies": updated_cookies}})
+                                print(f"[worker] Updated cookies saved to DB for {name}")
+                        except Exception as cookie_err:
+                            print(f"[worker] Failed to save updated cookies: {cookie_err}")
+                        await ctx.close()
+                        await _pc(progress_callback, f"✅ Done on `{name}`")
+                        return {"success": True, "image_url": image_url, "account": name}
+
+                    body = await page.text_content("body") or ""
+                    reset_at = parse_limit_reset_time(body)
+                    if reset_at:
+                        mark_limited(account["_id"], reset_at)
+                        await ctx.close()
+                        left = (reset_at - datetime.now(timezone.utc)).total_seconds()
+                        h, m = int(left // 3600), int((left % 3600) // 60)
+                        await _pc(progress_callback, f"⏳ `{name}` limit — resets in {h}h {m}m")
+                        continue
+
+                    await ctx.close()
+                    await _pc(progress_callback, "❌ No image generated")
+                    return {"success": False, "error": "No image generated"}
+
+                except Exception as e:
+                    mark_error(account["_id"])
+                    if ctx:
+                        try:
+                            await ctx.close()
+                        except:
+                            pass
+                    if progress_callback:
+                        await progress_callback(f"⚠️ {str(e)[:60]}")
+                    continue
+
+            return {"success": False, "error": "All accounts exhausted"}
+        finally:
+            await close_browser()
 
 
 # ── Submit bulk ──
@@ -564,96 +591,107 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
 async def submit_bulk(prompts, image_size="1:1", retry=5, progress_callback=None):
     async with worker_lock:
         print(f"[worker] submit_bulk: {len(prompts)} prompts, size={image_size}")
-        for attempt in range(retry):
-            account = get_next_account()
-            if not account:
+        try:
+            for attempt in range(retry):
+                account = get_next_account()
+                if not account:
+                    if progress_callback:
+                        await progress_callback("❌ No valid accounts")
+                    return [{"success": False, "error": "No accounts"} for _ in prompts]
+
+                name = display_name(account)
                 if progress_callback:
-                    await progress_callback("❌ No valid accounts")
-                return [{"success": False, "error": "No accounts"} for _ in prompts]
+                    await progress_callback(f"🔄 Attempt {attempt+1} — `{name}`")
 
-            name = display_name(account)
-            if progress_callback:
-                await progress_callback(f"🔄 Attempt {attempt+1} — `{name}`")
-
-            logged_in = await ensure_logged_in(account, cb=progress_callback)
-            if not logged_in:
-                mark_error(account["_id"])
-                continue
-
-            if progress_callback:
-                await progress_callback(f"✅ Logged in as `{name}`")
-
-            ctx, page = None, None
-            try:
-                ctx, page = await create_guest_context()
-                if not ctx:
+                logged_in = await ensure_logged_in(account, cb=progress_callback)
+                if not logged_in:
+                    mark_error(account["_id"])
                     continue
 
-                results = []
-                limit_hit = False
-                for i, prompt in enumerate(prompts):
-                    if limit_hit:
-                        break
+                if progress_callback:
+                    await progress_callback(f"✅ Logged in as `{name}`")
 
-                    if progress_callback:
-                        await progress_callback(f"📝 `{i+1}/{len(prompts)}`: `{prompt[:40]}...`")
+                ctx, page = None, None
+                try:
+                    ctx, page = await create_guest_context()
+                    if not ctx:
+                        continue
 
-                    try:
-                        await dismiss_popups(page)
+                    results = []
+                    limit_hit = False
+                    for i, prompt in enumerate(prompts):
+                        if limit_hit:
+                            break
 
-                        if not await ensure_prompt_visible(page):
-                            results.append({"success": False, "error": "Prompt input not found"})
-                            continue
+                        if progress_callback:
+                            await progress_callback(f"📝 `{i+1}/{len(prompts)}`: `{prompt[:40]}...`")
 
-                        ta = await find_visible(page, PROMPT_SELECTORS, timeout=5000)
-                        if not ta:
-                            results.append({"success": False, "error": "Prompt not found"})
-                            continue
+                        try:
+                            await dismiss_popups(page)
 
-                        await ta.click(click_count=3)
-                        await asyncio.sleep(0.3)
-                        await page.keyboard.type(prompt, delay=10)
-                        await asyncio.sleep(1)
+                            if not await ensure_prompt_visible(page):
+                                results.append({"success": False, "error": "Prompt input not found"})
+                                continue
 
-                        send_btn = await find_visible(page, GENERATE_BTN_SELECTORS, timeout=5000)
-                        if send_btn:
-                            await send_btn.click()
-                        else:
-                            await page.keyboard.press("Enter")
+                            ta = await find_visible(page, PROMPT_SELECTORS, timeout=5000)
+                            if not ta:
+                                results.append({"success": False, "error": "Prompt not found"})
+                                continue
 
-                        await asyncio.sleep(3)
-                        image_url = await wait_for_image(page)
+                            await ta.click(click_count=3)
+                            await asyncio.sleep(0.3)
+                            await page.keyboard.type(prompt, delay=10)
+                            await asyncio.sleep(1)
 
-                        if image_url:
-                            results.append({"success": True, "image_url": image_url, "account": name})
-                            mark_success(account["_id"])
-                        else:
-                            body = await page.text_content("body") or ""
-                            reset_at = parse_limit_reset_time(body)
-                            if reset_at:
-                                mark_limited(account["_id"], reset_at)
-                                results.append({"success": False, "error": "Limit reached"})
-                                limit_hit = True
+                            send_btn = await find_visible(page, GENERATE_BTN_SELECTORS, timeout=5000)
+                            if send_btn:
+                                await send_btn.click()
                             else:
-                                results.append({"success": False, "error": "No image"})
+                                await page.keyboard.press("Enter")
 
-                        if i < len(prompts) - 1 and not limit_hit:
-                            await page.goto(IMAGES_URL, wait_until="domcontentloaded", timeout=20000)
-                            await asyncio.sleep(2)
+                            await asyncio.sleep(3)
+                            image_url = await wait_for_image(page)
 
-                    except Exception as e:
-                        results.append({"success": False, "error": str(e)[:60]})
+                            if image_url:
+                                results.append({"success": True, "image_url": image_url, "account": name})
+                                mark_success(account["_id"])
+                                try:
+                                    updated_cookies = await ctx.cookies()
+                                    if updated_cookies:
+                                        from db import accounts_col
+                                        accounts_col.update_one({"_id": account["_id"]}, {"$set": {"cookies": updated_cookies}})
+                                        print(f"[worker] Updated cookies saved to DB for {name}")
+                                except Exception as cookie_err:
+                                    print(f"[worker] Failed to save updated cookies: {cookie_err}")
+                            else:
+                                body = await page.text_content("body") or ""
+                                reset_at = parse_limit_reset_time(body)
+                                if reset_at:
+                                    mark_limited(account["_id"], reset_at)
+                                    results.append({"success": False, "error": "Limit reached"})
+                                    limit_hit = True
+                                else:
+                                    results.append({"success": False, "error": "No image"})
 
-                return results
+                            if i < len(prompts) - 1 and not limit_hit:
+                                await page.goto(IMAGES_URL, wait_until="domcontentloaded", timeout=20000)
+                                await asyncio.sleep(2)
 
-            finally:
-                if ctx:
-                    try:
-                        await ctx.close()
-                    except:
-                        pass
+                        except Exception as e:
+                            results.append({"success": False, "error": str(e)[:60]})
 
-        return [{"success": False, "error": "All accounts exhausted"} for _ in prompts]
+                    return results
+
+                finally:
+                    if ctx:
+                        try:
+                            await ctx.close()
+                        except:
+                            pass
+
+            return [{"success": False, "error": "All accounts exhausted"} for _ in prompts]
+        finally:
+            await close_browser()
 
 
 # ── Session check ──

@@ -33,7 +33,7 @@ def import_accounts(data):
 
 def get_next_account():
     now = datetime.now(timezone.utc)
-    docs = list(accounts_col.find().sort("last_used", -1))
+    docs = list(accounts_col.find().sort("last_used", 1))
     limited_accounts = []
     for d in docs:
         if d.get("expired"):
