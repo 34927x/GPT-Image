@@ -134,16 +134,48 @@ async def main():
 
     # --- Step 5: Inject cookies NOW (after page load) ---
     print(f"[Step 5] NOW injecting {len(cookies)} cookies into browser context...")
-    print(f"    → src/test_playwright.py:LINE (ctx.add_cookies)")
-    same_site_map = {"strict": "Strict", "lax": "Lax", "none": "None"}
+    
+    same_site_pw = {"strict": "Strict", "lax": "Lax", "no_restriction": "None", "unspecified": "None"}
+    allowed = {"name", "value", "domain", "path", "httpOnly", "secure", "sameSite", "expires"}
+    
+    sanitized_cookies = []
     for c in cookies:
-        ss = c.get("sameSite", "")
-        if isinstance(ss, str) and ss.lower() in same_site_map:
-            c["sameSite"] = same_site_map[ss.lower()]
-        if c.get("sameSite") not in ("Strict", "Lax", "None"):
-            c.pop("sameSite", None)
-    await ctx.add_cookies(cookies)
-    print(f"[Step 5] DONE - {len(cookies)} cookies injected")
+        name = c.get("name")
+        value = c.get("value")
+        if not name or not value:
+            continue
+        cleaned = {}
+        for k in allowed:
+            if k in c:
+                v = c[k]
+                if k in ("httpOnly", "secure"):
+                    cleaned[k] = bool(v)
+                elif k == "sameSite":
+                    ss = v.lower() if isinstance(v, str) else ""
+                    if ss in same_site_pw:
+                        cleaned[k] = same_site_pw[ss]
+                elif k == "expires":
+                    if isinstance(v, (int, float)):
+                        cleaned[k] = v
+                else:
+                    cleaned[k] = str(v)
+        if "domain" not in cleaned or not cleaned["domain"]:
+            continue
+        if "path" not in cleaned:
+            cleaned["path"] = "/"
+        sanitized_cookies.append(cleaned)
+
+    injected = 0
+    failed = 0
+    for i, c in enumerate(sanitized_cookies):
+        try:
+            await ctx.add_cookies([c])
+            injected += 1
+        except Exception as err:
+            failed += 1
+            print(f"    [!] Cookie #{i} ({c.get('name')}) failed: {err}")
+
+    print(f"[Step 5] DONE - {injected} injected, {failed} failed")
     print("    → Open DevTools > Application > Cookies > chatgpt.com to see")
     await asyncio.sleep(3)
 

@@ -223,6 +223,18 @@ async def refresh_cookies(label: str):
 
 if __name__ == "__main__":
     import uvicorn
+    
+    # Enforce Heroku-like 512MB RAM limit locally for testing
+    try:
+        import resource
+        mem_limit_mb = 512
+        limit_bytes = mem_limit_mb * 1024 * 1024
+        soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+        resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, hard))
+        print(f"🔒 Local memory limit restricted to {mem_limit_mb} MB (matching Heroku constraints)")
+    except Exception as e:
+        print(f"⚠️ Could not set memory limit: {e}")
+
     # Enable headful mode locally when running directly
     os.environ["DEBUG"] = "true"
     print("🚀 Starting GPT-Image-Bot locally...")

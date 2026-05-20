@@ -219,10 +219,30 @@ async def wait_for_cloudflare(p, max_wait=15):
     return False
 
 
+async def verify_login_status(page):
+    await wait_for_cloudflare(page, max_wait=15)
+    if LOGIN_URL in page.url:
+        return False
+    for sel in PROMPT_SELECTORS:
+        try:
+            el = await page.wait_for_selector(sel, timeout=3000)
+            if el and await el.is_visible():
+                return True
+        except:
+            pass
+    try:
+        login_btn = await page.query_selector('button:has-text("Log in"), a:has-text("Log in"), button:has-text("Sign up")')
+        if login_btn and await login_btn.is_visible():
+            return False
+    except:
+        pass
+    if "chatgpt.com" in page.url:
+        return True
+    return False
+
+
 async def ensure_prompt_visible(p):
-    await wait_for_cloudflare(p)
-    body = await p.text_content("body") or ""
-    if LOGIN_URL in p.url:
+    if not await verify_login_status(p):
         return False
     for sel in PROMPT_SELECTORS:
         try:
@@ -253,6 +273,7 @@ async def ensure_prompt_visible(p):
         title = await p.title()
     except:
         pass
+    body = await p.text_content("body") or ""
     print(f"[worker] ensure_prompt_visible failed: url={p.url} title='{title}'")
     if "cloudflare" in body.lower() or "turnstile" in body.lower() or "checking your browser" in body.lower() or "verify you are human" in body.lower() or "verify is you are human" in body.lower():
         print("[worker] CLOUDFLARE TURNSTILE/CHALLENGE PAGE DETECTED!")
@@ -447,16 +468,13 @@ async def login_account(account, cb=None):
         await ctx.close()
         return False
     print(f"[worker] LOGIN step7 done: url={page.url[:60]}")
-    await wait_for_cloudflare(page)
-    await asyncio.sleep(2)
-
-    if LOGIN_URL in page.url:
-        print(f"[worker] LOGIN FAILED: {label} expired")
+    if not await verify_login_status(page):
+        print(f"[worker] LOGIN FAILED: {label} expired or challenge failed")
         mark_expired(account["_id"])
         await ctx.close()
         if cb:
             try:
-                await asyncio.wait_for(cb("❌ Session expired — account removed"), timeout=5)
+                await asyncio.wait_for(cb("❌ Session expired or invalid — account removed"), timeout=5)
             except:
                 pass
         return False
