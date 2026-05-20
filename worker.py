@@ -45,15 +45,13 @@ def export_accounts():
     return data
 
 def import_accounts(data):
+    from worker.entry import process_account_entry
     count = 0
     for item in data:
         if not item.get("cookies"):
             continue
         label = item.get("label", f"Imported-{count}")
-        exists = accounts_col.find_one({"label": label})
-        if exists:
-            label = f"{label}-{count}"
-        Account.create(label, item["cookies"])
+        process_account_entry(item["cookies"], source="json_import", label=label)
         count += 1
     return count
 
@@ -127,21 +125,6 @@ def reset_limited_accounts():
 def get_expired_accounts():
     return list(accounts_col.find({"expired": True}))
 
-def add_manual_account(cookies, label=None):
-    if isinstance(cookies, str):
-        cookies = json.loads(cookies)
-    if not isinstance(cookies, list) or not cookies:
-        return False, "Invalid cookies format"
-    label = label or f"manual-{len(list(accounts_col.find()))+1}"
-    account = accounts_col.find_one({"label": label})
-    if account:
-        accounts_col.update_one(
-            {"_id": account["_id"]},
-            {"$set": {"cookies": cookies, "source": "manual", "expired": False, "error_count": 0}}
-        )
-        return True, f"Updated: {label}"
-    Account.create(label, cookies, source="manual")
-    return True, f"Created: {label}"
 
 def get_session_status():
     docs = Account.get_all()

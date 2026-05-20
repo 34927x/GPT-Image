@@ -369,7 +369,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             label = None
             cookies_str = txt
-        ok, msg = add_manual_account(cookies_str, label)
+        from worker.entry import process_account_entry
+        ok, msg = process_account_entry(cookies_str, source="manual", label=label)
         if ok:
             ud["awaiting_account_json"] = False
             await update.message.reply_text(
@@ -1280,30 +1281,12 @@ async def receive_cookies(request: Request):
     profile_name = body.get("profile_name", label)
     print(f"[api] Cookies received: label={label} count={len(cookies)} ip={client_ip}")
 
-    existing = accounts_col.find_one({"label": label})
-    if existing:
-        update_data = {
-            "cookies": cookies,
-            "source": "extension",
-            "profile_name": profile_name,
-            "last_updated": datetime.now(timezone.utc),
-            "expired": False,
-            "limited": False,
-            "limit_reset_at": None,
-            "limit_hit_at": None,
-            "error_count": 0
-        }
-        if not existing.get("first_loaded_at"):
-            update_data["first_loaded_at"] = datetime.now(timezone.utc)
-        accounts_col.update_one(
-            {"_id": existing["_id"]},
-            {"$set": update_data}
-        )
-        return {"success": True, "action": "updated", "label": label}
-
-    Account.create(label, cookies, source="extension")
-    accounts_col.update_one({"label": label}, {"$set": {"profile_name": profile_name}})
-    return {"success": True, "action": "created", "label": label}
+    from worker.entry import process_account_entry
+    ok, msg = process_account_entry(cookies, source="extension", label=label)
+    if ok:
+        accounts_col.update_one({"label": label}, {"$set": {"profile_name": profile_name, "last_updated": datetime.now(timezone.utc)}})
+        return {"success": True, "message": msg, "label": label}
+    return {"success": False, "error": msg}
 
 @app.get("/api/accounts")
 async def list_accounts():
