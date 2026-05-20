@@ -1,19 +1,16 @@
 import asyncio, os, sys, json, hmac, hashlib
 from datetime import datetime, timezone
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
 import config
-from db import init_db, queue_col, accounts_col
-from models import Queue, Account
+from config import init_db, queue_col, accounts_col, Queue, Account
 from bot import (start, menu_command, gen_command, button_handler,
-                 handle_text, handle_file, process_queue, status_command)
-from accounts.manager import reset_limited_accounts
-from worker import init_browser_background
-from ui import SEP, center
+                 handle_text, handle_file, process_queue, status_command,
+                 SEP, center)
+from worker import reset_limited_accounts, init_browser_background
 
 telegram_app = None
 API_KEY = os.getenv("API_KEY", "")

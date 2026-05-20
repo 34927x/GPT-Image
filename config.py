@@ -1,5 +1,68 @@
+import os
+import asyncio
 from datetime import datetime, timezone
-from db import accounts_col, queue_col, sessions_col
+from pymongo import MongoClient
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+MONGO_URI = os.getenv("MONGO_URI", "")
+MONGO_DB = os.getenv("MONGO_DB", "gpt_rotator")
+ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "0").split(",") if x]
+
+COOKIE_DOMAINS = ["chatgpt.com", ".openai.com"]
+RATE_LIMIT_THRESHOLD = 2
+MAX_QUEUE_PER_USER = 50
+SESSION_CHECK_HOURS = 6
+
+# MongoDB Client Setup
+_client = MongoClient(
+    MONGO_URI,
+    serverSelectionTimeoutMS=5000,
+    tlsInsecure=True
+)
+
+db = _client[MONGO_DB]
+
+accounts_col = db["accounts"]
+queue_col = db["queue"]
+settings_col = db["settings"]
+sessions_col = db["sessions"]
+
+async def init_db():
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: _client.admin.command('ping')
+        )
+    except Exception as e:
+        print(f"[db] MongoDB ping failed: {e}")
+        return
+
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: accounts_col.create_index("label", unique=True, sparse=True)
+        )
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: queue_col.create_index("status")
+        )
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: queue_col.create_index("created_at")
+        )
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: settings_col.create_index("key", unique=True)
+        )
+    except Exception as e:
+        print(f"[db] Index creation error: {e}")
+
+def get_setting(key, default=None):
+    doc = settings_col.find_one({"key": key})
+    return doc["value"] if doc else default
+
+def set_setting(key, value):
+    settings_col.update_one({"key": key}, {"$set": {"value": value}}, upsert=True)
+
 
 class Account:
     @staticmethod
@@ -49,6 +112,7 @@ class Account:
     @staticmethod
     def count():
         return accounts_col.count_documents({})
+
 
 class Queue:
     STATUS_PENDING = "pending"
