@@ -61,7 +61,6 @@ BROWSER_ARGS = [
     "--disable-gpu",
     "--no-first-run",
     "--no-zygote",
-    "--single-process",
     "--js-flags=--max-old-space-size=128",  # Limit JS V8 heap to 128MB
     "--disable-extensions",
     "--disable-audio-output",
@@ -706,7 +705,7 @@ async def check_session():
             try:
                 p = await asyncio.wait_for(async_playwright().start(), timeout=10)
                 temp_browser = await asyncio.wait_for(p.chromium.launch(
-                    headless=True, args=["--no-sandbox", "--single-process"]
+                    headless=True, args=["--no-sandbox"]
                 ), timeout=30)
                 ctx = await temp_browser.new_context(
                     viewport={"width": 1280, "height": 800},
