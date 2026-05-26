@@ -16,7 +16,6 @@ export default defineConfig({
     rollupOptions: {
       input: {
         sidebar: resolve(__dirname, 'sidebar.html'),
-        popup: resolve(__dirname, 'popup.html'),
         background: resolve(__dirname, 'src/background/index.ts'),
         'content-chatgpt': resolve(__dirname, 'src/content/chatgpt.ts'),
       },
