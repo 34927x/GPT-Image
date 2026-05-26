@@ -34,7 +34,7 @@ export default async function GalleryPage({
 
   const items = images.map((i) => ({
     id: i._id!.toString(),
-    url: i.url,
+    url: i.dataUrl,
     prompt: i.prompt,
     createdAt: i.createdAt.toISOString(),
   }));
@@ -55,6 +55,12 @@ export default async function GalleryPage({
           </Link>
         </Button>
       </div>
+
+      {items.length > 0 && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-300">
+          ⏰ Images are auto-deleted after 24 hours. Download them to keep.
+        </div>
+      )}
 
       {items.length === 0 ? (
         <Card>

@@ -154,7 +154,7 @@ export default async function DashboardOverview() {
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={img.url}
+                  src={img.dataUrl}
                   alt={img.prompt}
                   className="h-full w-full object-cover transition-transform group-hover:scale-105"
                   loading="lazy"

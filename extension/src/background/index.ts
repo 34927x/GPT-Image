@@ -3,8 +3,7 @@ import { storage } from '@/shared/storage';
 import { captureCurrentCookies, hasSessionCookie } from '@/shared/cookies';
 import type { UIMessage, BackgroundResponse } from '@/shared/messages';
 import { startLoop, stopLoop, isRunning } from './loop';
-import { refreshState, getSnapshot } from './state';
-import { switchToAccount } from './account-manager';
+import { refreshState } from './state';
 
 api.runtime.onInstalled.addListener(async () => {
   if (api.sidePanel) {
@@ -14,7 +13,6 @@ api.runtime.onInstalled.addListener(async () => {
   }
   await refreshState();
 
-  // If worker was previously enabled, resume
   const settings = await storage.getSettings();
   if (settings.workerEnabled && settings.serverUrl && settings.workerToken) {
     startLoop();
@@ -28,7 +26,7 @@ api.runtime.onStartup?.addListener?.(async () => {
   }
 });
 
-// Wake-up alarm so the service worker stays alive while polling
+// MV3 service worker keep-alive
 api.alarms.create('keepAlive', { periodInMinutes: 0.5 });
 api.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'keepAlive') {
@@ -51,7 +49,7 @@ api.runtime.onMessage.addListener((rawMsg, _sender, sendResponse) => {
       } satisfies BackgroundResponse);
     }
   })();
-  return true; // async response
+  return true;
 });
 
 async function handle(msg: UIMessage) {
@@ -61,7 +59,6 @@ async function handle(msg: UIMessage) {
 
     case 'setSettings': {
       const next = await storage.setSettings(msg.patch);
-      // If serverUrl/workerToken changed, reset loop
       const wasRunning = isRunning();
       if (wasRunning) await stopLoop();
       if (next.workerEnabled && next.serverUrl && next.workerToken) {
@@ -80,10 +77,10 @@ async function handle(msg: UIMessage) {
     case 'captureCurrentSession': {
       const cookies = await captureCurrentCookies();
       if (!cookies.length) {
-        throw new Error('No cookies found. Log into chatgpt.com first.');
+        throw new Error('No cookies found. Log into chatgpt.com in this browser first.');
       }
       if (!hasSessionCookie(cookies)) {
-        throw new Error('No session cookie detected. Are you logged in?');
+        throw new Error('No session cookie detected — are you logged in?');
       }
       const accounts = await storage.getAccounts();
       const id = `acc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -95,7 +92,24 @@ async function handle(msg: UIMessage) {
         errorCount: 0,
       });
       await storage.setAccounts(accounts);
-      await storage.setActiveIndex(accounts.length - 1);
+      return await refreshState();
+    }
+
+    case 'refreshAccountCookies': {
+      // User logged into chatgpt.com again and wants to refresh saved cookies
+      // for an existing account.
+      const cookies = await captureCurrentCookies();
+      if (!cookies.length || !hasSessionCookie(cookies)) {
+        throw new Error('No fresh session detected. Log in to chatgpt.com first.');
+      }
+      const accounts = await storage.getAccounts();
+      const a = accounts.find((x) => x.id === msg.id);
+      if (!a) throw new Error('Account not found');
+      a.cookies = cookies;
+      a.capturedAt = Date.now();
+      a.errorCount = 0;
+      a.rateLimitedUntil = undefined;
+      await storage.setAccounts(accounts);
       return await refreshState();
     }
 
@@ -103,15 +117,6 @@ async function handle(msg: UIMessage) {
       const accounts = await storage.getAccounts();
       const filtered = accounts.filter((a) => a.id !== msg.id);
       await storage.setAccounts(filtered);
-      const idx = await storage.getActiveIndex();
-      if (idx >= filtered.length) {
-        await storage.setActiveIndex(Math.max(0, filtered.length - 1));
-      }
-      return await refreshState();
-    }
-
-    case 'switchToAccount': {
-      await switchToAccount(msg.id);
       return await refreshState();
     }
 

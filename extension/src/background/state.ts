@@ -9,27 +9,23 @@ let snapshot: WorkerState = {
     workerToken: '',
     workerLabel: '',
     workerEnabled: false,
-    pollIntervalMs: 5000,
-    cooldownAfterRunMs: 3000,
-    rateLimitThreshold: 2,
+    pollIntervalMs: 4000,
+    cooldownAfterRunMs: 2500,
   },
   accounts: [],
-  activeIdx: 0,
   stats: { jobsToday: 0, jobsTotal: 0, jobsTodayDate: '', failsToday: 0 },
   workerId: '',
   status: 'idle',
 };
 
 export async function refreshState(patch?: Partial<WorkerState>): Promise<WorkerState> {
-  const [settings, accounts, activeIdx, stats, workerId] = await Promise.all([
+  const [settings, accounts, stats, workerId] = await Promise.all([
     storage.getSettings(),
     storage.getAccounts(),
-    storage.getActiveIndex(),
     storage.getStats(),
     storage.getWorkerId(),
   ]);
-  snapshot = { ...snapshot, settings, accounts, activeIdx, stats, workerId, ...(patch ?? {}) };
-  // Push to any open UI
+  snapshot = { ...snapshot, settings, accounts, stats, workerId, ...(patch ?? {}) };
   api.runtime.sendMessage({ type: 'stateUpdate', state: snapshot }).catch(() => {});
   return snapshot;
 }

@@ -11,23 +11,20 @@ export interface WorkerSettings {
   workerEnabled: boolean;
   pollIntervalMs: number;
   cooldownAfterRunMs: number;
-  rateLimitThreshold: number; // consecutive 429s before rotation
 }
 
 const DEFAULTS: WorkerSettings = {
-  serverUrl: '',
+  serverUrl: 'https://bulk-gpt-lemon.vercel.app',
   workerToken: '',
   workerLabel: '',
   workerEnabled: false,
-  pollIntervalMs: 5000,
-  cooldownAfterRunMs: 3000,
-  rateLimitThreshold: 2,
+  pollIntervalMs: 4000,
+  cooldownAfterRunMs: 2500,
 };
 
 const KEYS = {
   settings: 'bgt_worker_settings',
   accounts: 'bgt_accounts',
-  activeIdx: 'bgt_active_idx',
   workerId: 'bgt_worker_id',
   stats: 'bgt_stats',
 } as const;
@@ -37,8 +34,10 @@ export interface Account {
   label: string;
   cookies: Cookie[];
   capturedAt: number;
-  rateLimitedUntil?: number;
+  /** Most recent successful generation timestamp. */
   lastUsedAt?: number;
+  /** Locked out until this ms timestamp (rate limit). */
+  rateLimitedUntil?: number;
   errorCount: number;
 }
 
@@ -83,9 +82,6 @@ export const storage = {
 
   getAccounts: () => get<Account[]>(KEYS.accounts, []),
   setAccounts: (a: Account[]) => set(KEYS.accounts, a),
-
-  getActiveIndex: () => get<number>(KEYS.activeIdx, 0),
-  setActiveIndex: (i: number) => set(KEYS.activeIdx, i),
 
   async getWorkerId(): Promise<string> {
     const existing = await get<string>(KEYS.workerId, '');

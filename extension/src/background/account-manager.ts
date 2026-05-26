@@ -1,44 +1,17 @@
 import { storage, type Account } from '@/shared/storage';
-import { clearAllCookies, restoreCookies } from '@/shared/cookies';
 
-let switching = false;
-
-export async function getActiveAccount(): Promise<Account | null> {
-  const accounts = await storage.getAccounts();
-  if (!accounts.length) return null;
-  const idx = await storage.getActiveIndex();
-  return accounts[idx] ?? accounts[0];
-}
-
+/**
+ * Pick the next usable account: oldest-used first, skipping rate-limited ones.
+ * Returns null if all accounts are currently rate-limited or there are none.
+ */
 export async function pickNextAccount(): Promise<Account | null> {
   const accounts = await storage.getAccounts();
   if (!accounts.length) return null;
   const now = Date.now();
-  // Sort by oldest lastUsedAt first, ignoring rate-limited
   const usable = accounts
-    .map((a, i) => ({ a, i }))
-    .filter(({ a }) => !(a.rateLimitedUntil && a.rateLimitedUntil > now))
-    .sort((x, y) => (x.a.lastUsedAt ?? 0) - (y.a.lastUsedAt ?? 0));
-  if (!usable.length) return null;
-  return usable[0].a;
-}
-
-export async function switchToAccount(id: string): Promise<boolean> {
-  if (switching) return false;
-  switching = true;
-  try {
-    const accounts = await storage.getAccounts();
-    const idx = accounts.findIndex((a) => a.id === id);
-    if (idx < 0) return false;
-    await clearAllCookies();
-    await restoreCookies(accounts[idx].cookies);
-    await storage.setActiveIndex(idx);
-    accounts[idx].lastUsedAt = Date.now();
-    await storage.setAccounts(accounts);
-    return true;
-  } finally {
-    switching = false;
-  }
+    .filter((a) => !(a.rateLimitedUntil && a.rateLimitedUntil > now))
+    .sort((x, y) => (x.lastUsedAt ?? 0) - (y.lastUsedAt ?? 0));
+  return usable[0] ?? null;
 }
 
 export async function markAccountSuccess(id: string): Promise<void> {
@@ -57,7 +30,7 @@ export async function markAccountRateLimited(
   const accounts = await storage.getAccounts();
   const a = accounts.find((x) => x.id === id);
   if (!a) return;
-  // Default: 1 hour cooldown if server didn't tell us
+  // Default cooldown: 1 hour if server didn't tell us when limits reset
   a.rateLimitedUntil = resetAt ?? Date.now() + 60 * 60 * 1000;
   await storage.setAccounts(accounts);
 }
@@ -67,6 +40,23 @@ export async function markAccountError(id: string): Promise<void> {
   const a = accounts.find((x) => x.id === id);
   if (!a) return;
   a.errorCount += 1;
+  await storage.setAccounts(accounts);
+}
+
+/**
+ * After a successful run, refresh the saved cookies for an account with the
+ * latest values from the incognito session. Keeps tokens current.
+ */
+export async function updateAccountCookies(
+  id: string,
+  cookies: Account['cookies']
+): Promise<void> {
+  if (!cookies.length) return;
+  const accounts = await storage.getAccounts();
+  const a = accounts.find((x) => x.id === id);
+  if (!a) return;
+  a.cookies = cookies;
+  a.capturedAt = Date.now();
   await storage.setAccounts(accounts);
 }
 

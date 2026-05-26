@@ -16,7 +16,7 @@
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "types": ["chrome", "firefox-webext-browser", "vite/client", "node"],
+    "types": ["chrome", "vite/client", "node"],
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],

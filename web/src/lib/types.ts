@@ -53,8 +53,8 @@ export interface Image {
   jobId: ObjectId;
   keyId: ObjectId;
   prompt: string;
-  url: string; // cloudinary URL or data URI
-  storage: 'cloudinary' | 'mongodb';
+  /** Data URL — `data:image/png;base64,...`. Auto-deleted after 24h via TTL index. */
+  dataUrl: string;
   account?: string;
   createdAt: Date;
 }

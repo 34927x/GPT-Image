@@ -34,17 +34,17 @@ export async function GET(req: NextRequest) {
     .project({ _id: 1, status: 1, error: 1, imageId: 1 })
     .toArray();
 
-  // Pull image URLs in one go
+  // Pull image data URLs in one go
   const imageIds = jobs
     .map((j) => j.imageId)
     .filter((id): id is ObjectId => !!id);
   const images = imageIds.length
     ? await c.images
         .find({ _id: { $in: imageIds } })
-        .project({ _id: 1, url: 1 })
+        .project({ _id: 1, dataUrl: 1 })
         .toArray()
     : [];
-  const imageMap = new Map(images.map((i) => [i._id?.toString(), i.url]));
+  const imageMap = new Map(images.map((i) => [i._id?.toString(), i.dataUrl]));
 
   return NextResponse.json({
     jobs: jobs.map((j) => ({

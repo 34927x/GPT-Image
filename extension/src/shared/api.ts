@@ -1,9 +1,5 @@
 /**
- * Browser API shim — works in Chrome (chrome.*) and Firefox (browser.*).
+ * Chrome MV3 only. We re-export `chrome` as `api` so we can swap implementations
+ * later without touching call sites.
  */
-export const api: typeof chrome = (() => {
-  if (typeof globalThis.browser !== 'undefined') return globalThis.browser as unknown as typeof chrome;
-  return globalThis.chrome;
-})();
-
-export const isFirefox = typeof globalThis.browser !== 'undefined';
+export const api = chrome;

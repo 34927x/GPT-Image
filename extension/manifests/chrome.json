@@ -2,14 +2,13 @@
   "manifest_version": 3,
   "name": "Bulk-GPT Worker",
   "version": "4.0.0",
-  "description": "Worker extension for Bulk-GPT — runs prompts on ChatGPT with rotating accounts.",
+  "description": "Worker extension for Bulk-GPT — generates images on chatgpt.com with rotating accounts in incognito tabs.",
   "permissions": [
     "cookies",
     "storage",
     "alarms",
     "tabs",
-    "scripting",
-    "sidePanel"
+    "scripting"
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
@@ -17,6 +16,7 @@
     "https://*.vercel.app/*",
     "http://localhost:3000/*"
   ],
+  "incognito": "split",
   "background": {
     "service_worker": "assets/background.js",
     "type": "module"

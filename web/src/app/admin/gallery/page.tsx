@@ -67,14 +67,13 @@ export default async function AdminGallery({
               return (
                 <a
                   key={img._id?.toString()}
-                  href={img.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  href={img.dataUrl}
+                  download={`${img.prompt.replace(/[^a-z0-9]+/gi, '-').slice(0, 40) || 'image'}.png`}
                   className="group relative aspect-square overflow-hidden rounded-lg border border-border/60 bg-card/40"
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={img.url}
+                    src={img.dataUrl}
                     alt={img.prompt}
                     loading="lazy"
                     className="h-full w-full object-cover transition-transform group-hover:scale-105"

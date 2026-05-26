@@ -1,8 +1,3 @@
-/**
- * Strongly-typed message contract between popup/sidebar (UI), background (worker),
- * and content script (chatgpt.com automation).
- */
-
 import type { Account } from './storage';
 
 // ============ UI ↔ Background ============
@@ -11,8 +6,8 @@ export type UIMessage =
   | { type: 'setSettings'; patch: Partial<import('./storage').WorkerSettings> }
   | { type: 'setWorkerEnabled'; enabled: boolean }
   | { type: 'captureCurrentSession'; label?: string }
+  | { type: 'refreshAccountCookies'; id: string }
   | { type: 'removeAccount'; id: string }
-  | { type: 'switchToAccount'; id: string }
   | { type: 'pingServer' };
 
 export type BackgroundResponse =
@@ -29,7 +24,7 @@ export type ContentResponse =
   | { type: 'rateLimited'; resetAt?: number }
   | { type: 'failure'; error: string };
 
-// ============ Server contract ============
+// ============ Server ============
 export interface ServerJob {
   id: string;
   prompt: string;
@@ -54,7 +49,6 @@ export interface CompleteFailure {
 export interface WorkerState {
   settings: import('./storage').WorkerSettings;
   accounts: Account[];
-  activeIdx: number;
   stats: import('./storage').Stats;
   workerId: string;
   status: 'idle' | 'polling' | 'processing' | 'paused' | 'error';

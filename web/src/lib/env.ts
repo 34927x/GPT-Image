@@ -19,12 +19,4 @@ export const env = {
   WORKER_TOKEN: required('WORKER_TOKEN'),
   ADMIN_MASTER_KEY: required('ADMIN_MASTER_KEY'),
   SITE_URL: optional('NEXT_PUBLIC_SITE_URL', 'http://localhost:3000'),
-  CLOUDINARY: {
-    CLOUD_NAME: optional('CLOUDINARY_CLOUD_NAME'),
-    API_KEY: optional('CLOUDINARY_API_KEY'),
-    API_SECRET: optional('CLOUDINARY_API_SECRET'),
-  },
 };
-
-export const isCloudinaryConfigured = () =>
-  !!(env.CLOUDINARY.CLOUD_NAME && env.CLOUDINARY.API_KEY && env.CLOUDINARY.API_SECRET);

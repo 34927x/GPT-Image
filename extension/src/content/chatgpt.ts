@@ -45,7 +45,7 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 
 let aborted = false;
 
-const api = (typeof browser !== 'undefined' ? (browser as unknown as typeof chrome) : chrome);
+const api = chrome;
 
 api.runtime.onMessage.addListener((rawMsg, _sender, sendResponse) => {
   const msg = rawMsg as ContentMessage;

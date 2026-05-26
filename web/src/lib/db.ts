@@ -51,6 +51,11 @@ export async function ensureIndexes() {
     c.jobs.createIndex({ keyId: 1, createdAt: -1 }),
     c.images.createIndex({ keyId: 1, createdAt: -1 }),
     c.images.createIndex({ jobId: 1 }),
+    // Auto-delete images 24h after creation — keeps MongoDB lean
+    c.images.createIndex(
+      { createdAt: 1 },
+      { expireAfterSeconds: 60 * 60 * 24 }
+    ),
     c.accounts.createIndex({ label: 1 }, { unique: true }),
     c.heartbeats.createIndex({ workerId: 1 }, { unique: true }),
     c.heartbeats.createIndex(

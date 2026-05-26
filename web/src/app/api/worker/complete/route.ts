@@ -9,7 +9,6 @@ import {
   jsonWithCors,
   corsHeaders,
 } from '@/lib/worker-auth';
-import { uploadImage } from '@/lib/image-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -54,7 +53,6 @@ export async function POST(req: NextRequest) {
   const c = await collections();
   const job = await c.jobs.findOne({ _id: jobObjectId });
   if (!job) return jsonWithCors(req, { error: 'Job not found' }, { status: 404 });
-  // (we don't enforce workerId match — workers can change between attempts)
 
   const now = new Date();
 
@@ -73,19 +71,12 @@ export async function POST(req: NextRequest) {
     return jsonWithCors(req, { ok: true });
   }
 
-  // SUCCESS — upload, store image, link to job
-  const stored = await uploadImage({
-    dataUrl: body.imageDataUrl,
-    keyId: job.keyId,
-    prompt: job.prompt,
-  });
-
+  // SUCCESS — store data URL inline (TTL auto-deletes after 24h)
   const imageDoc = await c.images.insertOne({
     jobId: jobObjectId,
     keyId: job.keyId,
     prompt: job.prompt,
-    url: stored.url,
-    storage: stored.storage,
+    dataUrl: body.imageDataUrl,
     account: body.account,
     createdAt: now,
   });
@@ -103,7 +94,6 @@ export async function POST(req: NextRequest) {
     }
   );
 
-  // increment quota
   await c.keys.updateOne(
     { _id: job.keyId },
     {

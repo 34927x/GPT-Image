@@ -2,13 +2,12 @@ import { storage } from '@/shared/storage';
 import { server } from '@/shared/server';
 import {
   pickNextAccount,
-  switchToAccount,
   markAccountRateLimited,
   markAccountError,
   markAccountSuccess,
-  getActiveAccount,
+  updateAccountCookies,
 } from './account-manager';
-import { executePrompt } from './runner';
+import { executeIncognito } from './runner';
 import { buildHeartbeatSnapshot, patchStatus, refreshState } from './state';
 
 let running = false;
@@ -26,11 +25,10 @@ export async function startLoop(): Promise<void> {
   stopRequested = false;
   patchStatus({ status: 'polling', lastError: undefined });
 
-  // Heartbeat every 15s
   await safeHeartbeat();
   heartbeatTimer = setInterval(safeHeartbeat, 15_000);
 
-  await loop();
+  loop();
 }
 
 export async function stopLoop(): Promise<void> {
@@ -51,46 +49,39 @@ async function loop(): Promise<void> {
     try {
       patchStatus({ status: 'polling' });
       const job = await server.claim();
+
       if (!job) {
         await sleep(settings.pollIntervalMs);
         continue;
       }
 
-      patchStatus({ status: 'processing', currentJob: { id: job.id, prompt: job.prompt } });
-
-      // Pick & switch account
-      const next = await pickNextAccount();
-      if (!next) {
+      // Pick an account
+      const account = await pickNextAccount();
+      if (!account) {
         await server.complete({
           outcome: 'failure',
           jobId: job.id,
-          error: 'No active accounts available (all rate-limited)',
+          error: 'No active accounts available (all rate-limited or none added)',
         });
-        patchStatus({ status: 'paused', lastError: 'All accounts rate-limited.' });
-        await sleep(60_000); // backoff
+        patchStatus({
+          status: 'paused',
+          lastError: 'All accounts rate-limited or none added.',
+        });
+        // Long backoff so we don't keep hammering the queue
+        await sleep(60_000);
         continue;
       }
 
-      const active = await getActiveAccount();
-      const needsReload = !active || active.id !== next.id;
-      if (needsReload) {
-        const ok = await switchToAccount(next.id);
-        if (!ok) {
-          await server.complete({
-            outcome: 'failure',
-            jobId: job.id,
-            error: 'Failed to switch account cookies',
-          });
-          await sleep(settings.cooldownAfterRunMs);
-          continue;
-        }
-      }
+      patchStatus({
+        status: 'processing',
+        currentJob: { id: job.id, prompt: job.prompt },
+      });
 
-      const result = await executePrompt({
+      const { result, refreshedCookies } = await executeIncognito({
         jobId: job.id,
         prompt: job.prompt,
         imageSize: job.imageSize,
-        needsReload,
+        account,
       });
 
       if (result.type === 'success') {
@@ -98,14 +89,15 @@ async function loop(): Promise<void> {
           outcome: 'success',
           jobId: job.id,
           imageDataUrl: result.imageDataUrl,
-          account: next.label,
+          account: account.label,
         });
-        await markAccountSuccess(next.id);
+        await markAccountSuccess(account.id);
+        if (refreshedCookies && refreshedCookies.length) {
+          await updateAccountCookies(account.id, refreshedCookies);
+        }
         await storage.incStats({ ok: true });
       } else if (result.type === 'rateLimited') {
-        await markAccountRateLimited(next.id, result.resetAt);
-        // Don't mark job failed yet — re-queue by leaving status 'pending' is impossible here
-        // since claim already moved it to processing. Mark failed; the customer can retry.
+        await markAccountRateLimited(account.id, result.resetAt);
         await server.complete({
           outcome: 'failure',
           jobId: job.id,
@@ -113,7 +105,7 @@ async function loop(): Promise<void> {
         });
         await storage.incStats({ ok: false });
       } else {
-        await markAccountError(next.id);
+        await markAccountError(account.id);
         await server.complete({
           outcome: 'failure',
           jobId: job.id,
@@ -129,7 +121,7 @@ async function loop(): Promise<void> {
       const msg = e instanceof Error ? e.message : String(e);
       patchStatus({ status: 'error', lastError: msg });
       console.error('[bgt] loop error', msg);
-      await sleep(8_000); // network backoff
+      await sleep(8_000);
     }
   }
 
