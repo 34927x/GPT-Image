@@ -20,6 +20,10 @@ api.runtime.onInstalled.addListener(async () => {
 });
 
 api.runtime.onStartup?.addListener?.(async () => {
+  // Re-apply on every browser start (in case the setting was reset)
+  if (api.sidePanel) {
+    api.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+  }
   // If a batch was running before browser restart, leave it paused.
   const batch = await storage.getBatch();
   if (batch && batch.status === 'running') {
@@ -28,6 +32,14 @@ api.runtime.onStartup?.addListener?.(async () => {
     await storage.setBatch(batch);
   }
   await refreshState();
+});
+
+// Backup: explicitly open side panel on icon click. This handles cases where
+// `setPanelBehavior` hasn't taken effect yet, or the user is on an older Chrome.
+api.action.onClicked.addListener((tab) => {
+  if (api.sidePanel && tab.windowId !== undefined) {
+    api.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+  }
 });
 
 // Keeps the service worker alive while a batch runs
