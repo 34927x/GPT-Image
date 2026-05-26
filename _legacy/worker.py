@@ -1,4 +1,5 @@
-import asyncio, re, os, io, sys, json
+import asyncio, re, os, io, sys, json, random
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from playwright.async_api import async_playwright, TimeoutError as PwTimeout
 from playwright_stealth import stealth_async
@@ -187,6 +188,10 @@ from playwright_stealth import stealth_async
 
 worker_lock = asyncio.Lock()
 
+# Persistent Chrome profiles directory
+PROFILES_DIR = Path.home() / ".gpt-image-profiles"
+PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+
 # Single persistent browser (lazy init, kept alive across requests)
 _browser_data = {"p": None, "browser": None}
 
@@ -250,6 +255,12 @@ BROWSER_ARGS = [
     "--disable-renderer-backgrounding",
     "--metrics-recording-only",
 ]
+
+
+async def human_delay(min_s=1.0, max_s=3.0):
+    """Random human-like delay between actions."""
+    delay = random.uniform(min_s, max_s)
+    await asyncio.sleep(delay)
 
 
 def _sanitize_cookies(cookies):
@@ -406,13 +417,27 @@ async def verify_login_status(page):
         except:
             pass
     try:
-        login_btn = await page.query_selector('button:has-text("Log in"), a:has-text("Log in"), button:has-text("Sign up")')
+        login_btn = await page.query_selector('button:has-text("Log in"), a:has-text("Log in"), button:has-text("Sign up"), [data-testid="login-button"]')
         if login_btn and await login_btn.is_visible():
             return False
     except:
         pass
-    if "chatgpt.com" in page.url:
-        return True
+        
+    # Check for user profile menu or avatar (surefire signs of being logged in)
+    try:
+        profile_indicators = [
+            '[data-testid="profile-button"]', 
+            '[data-testid="user-menu"]',
+            'img[alt*="profile"]'
+        ]
+        for sel in profile_indicators:
+            el = await page.query_selector(sel)
+            if el and await el.is_visible():
+                return True
+    except:
+        pass
+
+    # If we get here and there's no prompt and no profile, we're probably NOT logged in
     return False
 
 
@@ -475,7 +500,14 @@ async def wait_for_image(p, timeout=180000):
     return None
 
 
-# ── Browser lifecycle (single persistent browser) ──
+# ── Browser lifecycle (persistent profile per account) ──
+
+def get_profile_dir(account):
+    """Return the Chrome profile directory for a given account."""
+    account_id = str(account["_id"])
+    profile_dir = PROFILES_DIR / account_id
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    return str(profile_dir)
 
 def get_browser():
     return _browser_data["browser"]
@@ -483,44 +515,11 @@ def get_browser():
 def get_playwright():
     return _browser_data["p"]
 
-async def ensure_browser():
-    if get_browser() and get_browser().is_connected():
-        return get_browser()
-    # Browser disconnected or crashed — force-replace it
-    if get_browser():
-        try:
-            await asyncio.wait_for(get_browser().close(), timeout=5)
-        except:
-            pass
-        _browser_data["browser"] = None
-    if get_playwright():
-        try:
-            await asyncio.wait_for(get_playwright().stop(), timeout=5)
-        except:
-            pass
-        _browser_data["p"] = None
-    try:
-        p = await asyncio.wait_for(async_playwright().start(), timeout=10)
-        browser = await asyncio.wait_for(p.chromium.launch(
-            headless=not os.getenv("DEBUG", "false").lower() == "true",
-            args=BROWSER_ARGS,
-        ), timeout=30)
-        _browser_data["p"] = p
-        _browser_data["browser"] = browser
-        print("[worker] Single persistent browser launched")
-        return browser
-    except asyncio.TimeoutError:
-        print("[worker] ensure_browser timeout — giving up")
-        return None
-    except Exception as e:
-        print(f"[worker] ensure_browser error: {e}")
-        return None
-
-
 async def close_browser():
-    if get_browser():
+    # For persistent context, ctx IS the browser
+    if _master["ctx"]:
         try:
-            await get_browser().close()
+            await _master["ctx"].close()
         except:
             pass
     if get_playwright():
@@ -536,169 +535,156 @@ async def close_browser():
     _master["storage_state"] = None
 
 
-# ── Master context (logged-in session per account) ──
+# ── Master context (persistent profile per account) ──
 
-async def login_account(account, cb=None):
+async def launch_profile(account, cb=None):
+    """Launch browser with persistent profile for the given account.
+    Profile saves all cookies/session data automatically — no cookie injection needed.
+    """
     label = account.get("label", "?")
-    print(f"[worker] ===== LOGIN: {label} (test_playwright.py flow) =====")
+    profile_dir = get_profile_dir(account)
+    print(f"[worker] ===== PROFILE LAUNCH: {label} (dir: {profile_dir}) =====")
 
-    cookies = account.get("cookies", [])
-    if not cookies:
-        print(f"[worker] No cookies for {label}, deleting")
-        mark_expired(account["_id"])
-        return False
-    if len(cookies) < 10:
-        print(f"[worker] Only {len(cookies)} cookies for {label} (need >= 10), deleting")
-        mark_expired(account["_id"])
-        return False
+    # Close existing context if switching accounts
+    await close_browser()
 
-    browser = await ensure_browser()
-    if not browser:
-        print(f"[worker] Browser unavailable for {label}")
-        return False
+    await _pc(cb, "🔄 Launching browser with profile...")
 
     try:
-        ctx = await asyncio.wait_for(browser.new_context(
+        p = await asyncio.wait_for(async_playwright().start(), timeout=10)
+        _browser_data["p"] = p
+
+        # Use real Google Chrome instead of Playwright Chromium (avoids Cloudflare detection)
+        chrome_path = "/usr/bin/google-chrome-stable"
+        ctx = await asyncio.wait_for(p.chromium.launch_persistent_context(
+            user_data_dir=profile_dir,
+            executable_path=chrome_path,
+            headless=not os.getenv("DEBUG", "false").lower() == "true",
+            args=BROWSER_ARGS,
             viewport={"width": 1280, "height": 800},
             user_agent=USER_AGENT,
             locale="en-US",
-        ), timeout=10)
-        page = await asyncio.wait_for(ctx.new_page(), timeout=10)
-    except asyncio.TimeoutError:
-        print(f"[worker] Context/page creation timeout for {label}")
-        return False
+        ), timeout=45)
+        print(f"[worker] Real Chrome launched with profile for {label}")
     except Exception as e:
-        print(f"[worker] Context creation error: {e}")
+        print(f"[worker] Profile launch error for {label}: {e}")
         return False
-    await stealth_async(page)
 
-    if cb:
-        try:
-            await asyncio.wait_for(cb("🔄 Launching browser..."), timeout=5)
-        except:
-            pass
+    # Get or create a page
+    page = ctx.pages[0] if ctx.pages else await ctx.new_page()
 
-    await asyncio.sleep(5)
-    print(f"[worker] LOGIN step4: navigating to chatgpt.com...")
+    # Human-like delay before navigating
+    await human_delay(2.0, 5.0)
 
-    if cb:
-        try:
-            await asyncio.wait_for(cb("🌐 Navigating to ChatGPT..."), timeout=5)
-        except:
-            pass
+    await _pc(cb, "🌐 Navigating to ChatGPT...")
+    print(f"[worker] Navigating to {CHATGPT_URL}...")
     try:
         await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=60000)
     except Exception as e:
-        print(f"[worker] Step 4 nav error: {e}")
-        await ctx.close()
+        print(f"[worker] Navigation error: {e}")
+        await close_browser()
         return False
-    print(f"[worker] LOGIN step4 done: url={page.url[:60]}")
-    await asyncio.sleep(3)
 
-    print(f"[worker] LOGIN step5: reloading...")
-    try:
-        await page.reload(wait_until="domcontentloaded", timeout=60000)
-    except Exception as e:
-        print(f"[worker] Step 5 reload error: {e}")
-        await ctx.close()
-        return False
-    print(f"[worker] LOGIN step5 done")
+    await human_delay(3.0, 6.0)
+    print(f"[worker] Page loaded: url={page.url[:80]}")
 
-    if cb:
-        try:
-            await asyncio.wait_for(cb("🍪 Injecting cookies..."), timeout=5)
-        except:
-            pass
-    print(f"[worker] LOGIN step6: sanitizing {len(cookies)} cookies...")
-    cookies = _sanitize_cookies(cookies)
-    print(f"[worker] {len(cookies)} valid cookies after sanitize")
-    failed = 0
-    for i, c in enumerate(cookies):
-        try:
-            await ctx.add_cookies([c])
-        except Exception as e:
-            failed += 1
-            if failed <= 3:
-                print(f"[worker] Cookie #{i} ({c.get('name')}) failed: {str(e)[:80]}")
-    if failed == len(cookies):
-        print(f"[worker] ALL {failed} cookies failed — login impossible")
-        await ctx.close()
-        return False
-    if failed:
-        print(f"[worker] {failed}/{len(cookies)} cookies failed (non-critical), continuing")
-    print(f"[worker] {len(cookies)-failed} cookies injected successfully")
-    await asyncio.sleep(3)
-    print(f"[worker] LOGIN step6 done: {len(cookies)} valid cookies, {failed} failed")
+    # Wait for Cloudflare if present
+    await wait_for_cloudflare(page, max_wait=20)
+    await human_delay(1.0, 3.0)
 
-    if cb:
-        try:
-            await asyncio.wait_for(cb("🔄 Verifying login..."), timeout=5)
-        except:
-            pass
-    print(f"[worker] LOGIN step7: navigating with cookies...")
-    try:
-        await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=60000)
-    except Exception as e:
-        print(f"[worker] Step 7 nav error: {e}")
-        await ctx.close()
-        return False
-    print(f"[worker] LOGIN step7 done: url={page.url[:60]}")
-    if not await verify_login_status(page):
-        print(f"[worker] LOGIN FAILED: {label} expired or challenge failed")
-        mark_expired(account["_id"])
-        await ctx.close()
-        if cb:
+    # Check if already logged in (profile has saved session)
+    logged_in = await verify_login_status(page)
+
+    if logged_in:
+        print(f"[worker] ✅ Already logged in via profile for {label}!")
+    else:
+        # Profile doesn't have session yet — try cookie injection as fallback
+        cookies = account.get("cookies", [])
+        if not cookies or len(cookies) < 5:
+            print(f"[worker] Not logged in and no cookies for {label}")
+            # Don't mark expired — user might want to manually log in
+            await _pc(cb, f"⚠️ {label}: Not logged in. Open profile manually to set up.")
+            await close_browser()
+            return False
+
+        await _pc(cb, "🍪 First-time setup — injecting cookies...")
+        print(f"[worker] Injecting {len(cookies)} cookies into profile...")
+        sanitized = _sanitize_cookies(cookies)
+        failed = 0
+        for i, c in enumerate(sanitized):
             try:
-                await asyncio.wait_for(cb("❌ Session expired or invalid — account removed"), timeout=5)
-            except:
-                pass
-        return False
-    print(f"[worker] Login verified for {label}")
+                await ctx.add_cookies([c])
+            except Exception as e:
+                failed += 1
+                if failed <= 3:
+                    print(f"[worker] Cookie #{i} ({c.get('name')}) failed: {str(e)[:80]}")
+
+        if failed == len(sanitized):
+            print(f"[worker] ALL cookies failed for {label}")
+            await close_browser()
+            return False
+
+        print(f"[worker] {len(sanitized)-failed} cookies injected into profile")
+        await human_delay(2.0, 4.0)
+
+        # Navigate again with cookies in profile
+        try:
+            await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=60000)
+        except Exception as e:
+            print(f"[worker] Post-cookie nav error: {e}")
+            await close_browser()
+            return False
+
+        await human_delay(3.0, 6.0)
+        await wait_for_cloudflare(page, max_wait=20)
+
+        logged_in = await verify_login_status(page)
+        if not logged_in:
+            print(f"[worker] LOGIN FAILED for {label} even after cookie injection")
+            mark_expired(account["_id"])
+            await _pc(cb, "❌ Session expired — account removed")
+            await close_browser()
+            return False
+
+        print(f"[worker] ✅ First-time cookie login succeeded — profile will remember session")
 
     await dismiss_popups(page)
-    await asyncio.sleep(2)
+    await human_delay(1.0, 2.0)
 
-    if cb:
-        try:
-            await asyncio.wait_for(cb("📍 Opening Images page..."), timeout=5)
-        except:
-            pass
-    try:
-        await page.goto(IMAGES_URL, wait_until="domcontentloaded", timeout=20000)
-    except Exception as e:
-        print(f"[worker] Images nav error: {e}")
-    await asyncio.sleep(5)
-
+    # Capture profile name
     name = await capture_profile_name(page)
     if name:
         update_profile_name(account["_id"], name)
 
-    storage = await ctx.storage_state()
-
-    # Close old master if switching accounts
-    if _master["ctx"] and _master["ctx"] != ctx:
-        try:
-            await _master["ctx"].close()
-        except:
-            pass
+    # Navigate to images page
+    await _pc(cb, "📍 Opening Images page...")
+    try:
+        await page.goto(IMAGES_URL, wait_until="domcontentloaded", timeout=20000)
+    except Exception as e:
+        print(f"[worker] Images nav error: {e}")
+    await human_delay(3.0, 5.0)
 
     _master["ctx"] = ctx
     _master["page"] = page
     _master["account"] = account
-    _master["storage_state"] = storage
 
-    print(f"[worker] ===== LOGIN DONE: {label} =====")
+    print(f"[worker] ===== PROFILE READY: {label} =====")
     return True
 
 
 async def ensure_logged_in(account, cb=None):
-    """Make sure master context is logged into the given account."""
-    browser = get_browser()
-    browser_ok = browser and browser.is_connected()
-    current_id = _master["account"]["_id"] if (_master["account"] and browser_ok) else None
-    if current_id == account["_id"]:
-        return True
-    return await login_account(account, cb=cb)
+    """Make sure master context is active for the given account."""
+    current_id = _master["account"]["_id"] if _master["account"] else None
+    ctx = _master["ctx"]
+    if current_id == account["_id"] and ctx:
+        # Check if context is still alive
+        try:
+            page = _master["page"]
+            await page.title()  # Quick check
+            return True
+        except:
+            print(f"[worker] Context dead for {display_name(account)}, relaunching...")
+    return await launch_profile(account, cb=cb)
 
 
 # create_guest_context removed as we use the master context directly to optimize memory usage
@@ -750,7 +736,7 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                     page = _master["page"]
 
                     await page.goto(IMAGES_URL, wait_until="domcontentloaded", timeout=20000)
-                    await asyncio.sleep(3)
+                    await human_delay(2.0, 5.0)
                     await dismiss_popups(page)
 
                     if not await ensure_prompt_visible(page):
@@ -763,10 +749,11 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                     if not ta:
                         continue
 
+                    await human_delay(0.5, 1.5)
                     await ta.click(click_count=3)
-                    await asyncio.sleep(0.3)
-                    await page.keyboard.type(prompt, delay=10)
-                    await asyncio.sleep(1)
+                    await human_delay(0.3, 0.8)
+                    await page.keyboard.type(prompt, delay=random.randint(20, 60))
+                    await human_delay(1.0, 2.5)
 
                     send_btn = await find_visible(page, GENERATE_BTN_SELECTORS, timeout=5000)
                     if send_btn:
@@ -774,7 +761,7 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                     else:
                         await page.keyboard.press("Enter")
 
-                    await asyncio.sleep(3)
+                    await human_delay(2.0, 4.0)
 
                     await _pc(progress_callback, "⏳ Generating image...")
 
@@ -815,8 +802,10 @@ async def submit_prompt(prompt, image_size="1:1", retry=5, progress_callback=Non
                     continue
 
             return {"success": False, "error": "All accounts exhausted"}
-        finally:
+        except Exception as e:
+            print(f"[worker] Fatal error: {e}")
             await close_browser()
+            return {"success": False, "error": f"Fatal: {str(e)[:100]}"}
 
 
 # ── Submit bulk ──
@@ -916,8 +905,10 @@ async def submit_bulk(prompts, image_size="1:1", retry=5, progress_callback=None
                     return [{"success": False, "error": f"Exception: {str(e)[:60]}"} for _ in prompts]
 
             return [{"success": False, "error": "All accounts exhausted"} for _ in prompts]
-        finally:
+        except Exception as e:
+            print(f"[worker] Fatal bulk error: {e}")
             await close_browser()
+            return [{"success": False, "error": f"Fatal: {str(e)[:100]}"} for _ in prompts]
 
 
 # ── Session check ──
@@ -1018,46 +1009,113 @@ async def check_session():
     return expired
 
 
+
 # ── Background init (lazy — just ensures browser is ready) ──
 
 async def init_browser_background():
     """Lazy init: just make sure the persistent browser process exists."""
+    pass # No longer needed with profiles
+
+
+# ── FastAPI Server (Merged from local_worker.py) ──
+
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+
+WORKER_SECRET = os.getenv("WORKER_SECRET", "change_me_secret")
+WORKER_PORT = int(os.getenv("WORKER_PORT", "8888"))
+
+def verify_secret(request: Request):
+    key = request.headers.get("X-Worker-Secret", "")
+    if key != WORKER_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid worker secret")
+
+async def limit_reset_loop():
+    while True:
+        try:
+            await asyncio.sleep(300)
+            n = reset_limited_accounts()
+            if n > 0:
+                print(f"[worker] Reset {n} limited account(s)")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"[worker] Limit reset error: {e}")
+            await asyncio.sleep(60)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print(f"🖥️  GPT Image Local Worker")
+    print(f"📡 Starting on port {WORKER_PORT}")
     try:
-        await ensure_browser()
-        print("[worker] Background browser init complete")
+        from config import db
+        db.command('ping')
+        print("[worker] MongoDB connected ✅")
+        acct_count = accounts_col.count_documents({})
+        print(f"[worker] {acct_count} accounts in DB")
     except Exception as e:
-        print(f"[worker] Background browser init error: {e}")
+        print(f"[worker] MongoDB ping failed: {e}")
+
+    limit_task = asyncio.create_task(limit_reset_loop())
+    yield
+    limit_task.cancel()
+    await close_browser()
+    print("[worker] Shutdown complete")
+
+app = FastAPI(lifespan=lifespan, title="GPT Image Worker", docs_url=None, redoc_url=None)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+@app.get("/")
+async def root():
+    return {"status": "ok", "service": "GPT Image Worker"}
+
+@app.get("/health")
+async def health():
+    acct_count = accounts_col.count_documents({})
+    active = accounts_col.count_documents({"expired": {"$ne": True}, "limited": {"$ne": True}})
+    return {"status": "healthy", "accounts_total": acct_count, "accounts_available": active}
+
+@app.post("/process")
+async def process_prompt(request: Request):
+    verify_secret(request)
+    body = await request.json()
+    prompt = body.get("prompt", "")
+    image_size = body.get("image_size", "1:1")
+    retry = body.get("retry", 5)
+    if not prompt:
+        return {"success": False, "error": "Missing prompt"}
+    return await submit_prompt(prompt, image_size, retry)
+
+@app.post("/process-bulk")
+async def process_bulk(request: Request):
+    verify_secret(request)
+    body = await request.json()
+    prompts = body.get("prompts", [])
+    image_size = body.get("image_size", "1:1")
+    retry = body.get("retry", 5)
+    if not prompts:
+        return {"results": [], "error": "No prompts"}
+    return await submit_bulk(prompts, image_size, retry)
 
 
 if __name__ == "__main__":
     import sys
+    import uvicorn
     from dotenv import load_dotenv
     
-    # Load env variables from root .env file
     dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
     load_dotenv(dotenv_path)
-    
-    from db import init_db
-    
-    async def run_manual_test():
-        # Setup paths so we can import config correctly
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        
-        # Connect to MongoDB
-        await init_db()
-        
-        # Parse command line argument for prompt
-        prompt = "a cute red panda eating bamboo, high resolution"
-        if len(sys.argv) > 1:
+
+    # If args provided, run manual test
+    if len(sys.argv) > 1:
+        async def run_manual_test():
             prompt = " ".join(sys.argv[1:])
-            
-        print(f"🚀 Running manual worker test for prompt: '{prompt}'")
-        # Run headfully for local visibility
-        os.environ["DEBUG"] = "true"
-        
-        # Trigger the generation
-        result = await submit_prompt(prompt, image_size="1:1")
-        print("\n✨ Test Result:")
-        print(result)
-        
-    asyncio.run(run_manual_test())
+            print(f"🚀 Running manual worker test for prompt: '{prompt}'")
+            os.environ["DEBUG"] = "true"
+            result = await submit_prompt(prompt, image_size="1:1")
+            print("\n✨ Test Result:", result)
+        asyncio.run(run_manual_test())
+    else:
+        # Run FastAPI server
+        uvicorn.run("worker:app", host="0.0.0.0", port=WORKER_PORT, reload=False)

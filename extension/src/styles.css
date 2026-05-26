@@ -1,0 +1,97 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html, body, #app {
+  height: 100%;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: hsl(240 14% 4%);
+  background-image:
+    radial-gradient(circle at 20% 0%, hsl(263 80% 64% / 0.08), transparent 50%),
+    radial-gradient(circle at 80% 100%, hsl(188 95% 55% / 0.06), transparent 50%);
+  background-attachment: fixed;
+  color: hsl(0 0% 98%);
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(240 8% 16%);
+  border-radius: 6px;
+}
+
+@layer components {
+  .gradient-text {
+    background: linear-gradient(135deg, hsl(263 80% 64%), hsl(188 95% 55%));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .glass {
+    background: hsl(240 12% 7% / 0.7);
+    backdrop-filter: blur(12px);
+    border: 1px solid hsl(240 8% 16%);
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-xs font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, hsl(263 80% 64%), hsl(263 80% 54%));
+    color: white;
+    box-shadow: 0 4px 12px hsl(263 80% 64% / 0.3);
+  }
+  .btn-primary:hover { box-shadow: 0 6px 16px hsl(263 80% 64% / 0.4); }
+  .btn-gradient {
+    background: linear-gradient(135deg, hsl(263 80% 64%), hsl(188 95% 55%));
+    color: white;
+    box-shadow: 0 4px 12px hsl(263 80% 64% / 0.3);
+  }
+  .btn-gradient:hover { transform: translateY(-1px); box-shadow: 0 6px 16px hsl(263 80% 64% / 0.4); }
+  .btn-ghost {
+    color: hsl(240 5% 65%);
+    background: transparent;
+  }
+  .btn-ghost:hover { background: hsl(240 8% 14%); color: white; }
+  .btn-outline {
+    border: 1px solid hsl(240 8% 16%);
+    background: hsl(240 8% 12% / 0.6);
+    color: hsl(240 5% 75%);
+  }
+  .btn-outline:hover { border-color: hsl(263 80% 64% / 0.5); color: white; }
+  .btn-danger {
+    background: hsl(0 78% 60% / 0.15);
+    border: 1px solid hsl(0 78% 60% / 0.3);
+    color: hsl(0 78% 75%);
+  }
+  .btn-danger:hover { background: hsl(0 78% 60% / 0.25); }
+
+  .input {
+    @apply w-full rounded-md border border-[hsl(240_8%_16%)] bg-[hsl(240_8%_12%/0.6)] px-3 py-2 text-sm placeholder:text-[hsl(240_5%_45%)] focus:border-[hsl(263_80%_64%/0.5)] focus:outline-none focus:ring-2 focus:ring-[hsl(263_80%_64%/0.2)] transition-colors;
+  }
+
+  .card {
+    @apply rounded-xl border border-[hsl(240_8%_16%)] bg-[hsl(240_12%_7%/0.5)] backdrop-blur-md p-4;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider border;
+  }
+  .badge-success { @apply bg-emerald-500/15 text-emerald-300 border-emerald-500/30; }
+  .badge-warning { @apply bg-amber-500/15 text-amber-300 border-amber-500/30; }
+  .badge-danger  { @apply bg-rose-500/15 text-rose-300 border-rose-500/30; }
+  .badge-muted   { @apply bg-white/5 text-zinc-400 border-white/10; }
+}

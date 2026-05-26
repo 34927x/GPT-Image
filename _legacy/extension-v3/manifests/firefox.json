@@ -1,45 +1,37 @@
 {
   "manifest_version": 3,
-  "name": "Bulk-GPT Worker",
-  "version": "4.0.0",
-  "description": "Worker extension for Bulk-GPT — runs prompts on ChatGPT with rotating accounts.",
+  "name": "GPT Multi-Account Rotator",
+  "version": "3.0.0",
+  "description": "Rotate ChatGPT accounts, bulk image gen, auto zip download.",
   "permissions": [
-    "cookies",
-    "storage",
-    "alarms",
-    "tabs",
-    "scripting"
+    "cookies", "storage", "webRequest", "alarms", "tabs", "downloads"
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
-    "https://*.openai.com/*",
-    "https://*.vercel.app/*",
-    "http://localhost:3000/*"
+    "https://*.openai.com/*"
   ],
   "background": {
-    "scripts": ["assets/background.js"],
-    "type": "module"
+    "scripts": ["background.js"]
   },
   "content_scripts": [
     {
       "matches": ["https://chatgpt.com/*"],
-      "js": ["assets/content-chatgpt.js"],
+      "js": ["content.js"],
       "run_at": "document_idle"
     }
   ],
   "sidebar_action": {
     "default_panel": "sidebar.html",
-    "default_title": "Bulk-GPT Worker",
+    "default_title": "GPT Rotator",
     "default_icon": "icons/icon128.png"
   },
   "action": {
-    "default_title": "Bulk-GPT Worker",
+    "default_title": "GPT Rotator",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
-    },
-    "default_popup": "popup.html"
+    }
   },
   "icons": {
     "16": "icons/icon16.png",
@@ -48,8 +40,8 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "bulk-gpt-worker@turabcoder",
-      "strict_min_version": "115.0"
+      "id": "gpt-rotator-turabcoder@example.com",
+      "strict_min_version": "109.0"
     }
   }
 }

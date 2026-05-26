@@ -1,42 +1,16 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{
-  width:230px;
-  font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-  background:#0a0a14;color:#e8e8f0;text-align:center;
-}
-.p{padding:16px}
-.l{font-size:24px;margin-bottom:4px}
-h1{font-size:14px;font-weight:700;color:#fff;margin-bottom:2px}
-.s{font-size:10px;color:#686880;margin-bottom:12px}
-.s strong{color:#6c5ce7}
-.b{
-  width:100%;padding:8px;border:none;border-radius:6px;
-  font-size:12px;font-weight:600;cursor:pointer;margin-bottom:5px;
-}
-.pb{background:#10a37f;color:#fff}
-.pb:hover{background:#0d8b6b}
-.sb{background:#14142a;color:#9898b0;border:1px solid #28284a}
-.sb:hover{background:#1e1e3a;color:#e8e8f0}
-.c{font-size:9px;color:#686880;margin-top:6px}
-.c strong{color:#6c5ce7}
-</style>
-<title>GPT Rotator</title>
-</head>
-<body>
-<div class="p">
-<div class="l">⟳</div>
-<h1>GPT Rotator</h1>
-<p class="s">by <strong>TurabCoder</strong></p>
-<button class="b pb" id="openSidebar">📂 Open Sidebar</button>
-<button class="b sb" id="openChatGPT">Open chatgpt.com</button>
-<p class="c">Made with ❤️ by <strong>TurabCoder</strong></p>
-</div>
-<script src="popup.js"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=280, initial-scale=1" />
+    <title>Bulk-GPT</title>
+    <link rel="stylesheet" href="src/styles.css" />
+    <style>
+      body { width: 280px; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="src/popup/main.tsx"></script>
+  </body>
 </html>
