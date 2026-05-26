@@ -1,20 +1,25 @@
-import type { Account } from './storage';
+import type { Account, Batch, Settings, Stats } from './storage';
 
 // ============ UI ↔ Background ============
 export type UIMessage =
   | { type: 'getState' }
-  | { type: 'setSettings'; patch: Partial<import('./storage').WorkerSettings> }
-  | { type: 'setWorkerEnabled'; enabled: boolean }
+  | { type: 'setSettings'; patch: Partial<Settings> }
   | { type: 'captureCurrentSession'; label?: string }
   | { type: 'refreshAccountCookies'; id: string }
   | { type: 'removeAccount'; id: string }
-  | { type: 'pingServer' };
+  | { type: 'startBatch'; prompts: string[]; size: Settings['defaultSize'] }
+  | { type: 'pauseBatch' }
+  | { type: 'resumeBatch' }
+  | { type: 'stopBatch' }
+  | { type: 'clearBatch' }
+  | { type: 'pingServer' }
+  | { type: 'setWorkerEnabled'; enabled: boolean };
 
 export type BackgroundResponse =
   | { ok: true; data?: unknown }
   | { ok: false; error: string };
 
-// ============ Background ↔ Content ============
+// ============ Background ↔ Content (chatgpt.com tab) ============
 export type ContentMessage =
   | { type: 'runPrompt'; prompt: string; jobId: string; imageSize: string }
   | { type: 'abort' };
@@ -24,7 +29,7 @@ export type ContentResponse =
   | { type: 'rateLimited'; resetAt?: number }
   | { type: 'failure'; error: string };
 
-// ============ Server ============
+// ============ Server (worker mode, optional) ============
 export interface ServerJob {
   id: string;
   prompt: string;
@@ -46,12 +51,13 @@ export interface CompleteFailure {
 }
 
 // ============ Live state pushed to UI ============
-export interface WorkerState {
-  settings: import('./storage').WorkerSettings;
+export interface State {
+  settings: Settings;
   accounts: Account[];
-  stats: import('./storage').Stats;
+  stats: Stats;
   workerId: string;
-  status: 'idle' | 'polling' | 'processing' | 'paused' | 'error';
-  currentJob?: { id: string; prompt: string };
+  status: 'idle' | 'running' | 'paused' | 'error';
+  currentItem?: { id: string; prompt: string; account?: string };
   lastError?: string;
+  batch: Batch | null;
 }

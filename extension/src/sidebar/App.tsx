@@ -1,15 +1,15 @@
 import { useState } from 'preact/hooks';
-import { Activity, Settings, Users } from 'lucide-preact';
+import { Wand2, Users, Settings as SettingsIcon } from 'lucide-preact';
 import { useWorkerState } from '@/ui/hooks';
 import { Logo } from '@/ui/Logo';
-import { OverviewTab } from './tabs/OverviewTab';
+import { GenerateTab } from './tabs/GenerateTab';
 import { AccountsTab } from './tabs/AccountsTab';
 import { SettingsTab } from './tabs/SettingsTab';
 
-type Tab = 'overview' | 'accounts' | 'settings';
+type Tab = 'generate' | 'accounts' | 'settings';
 
 export function App() {
-  const [tab, setTab] = useState<Tab>('overview');
+  const [tab, setTab] = useState<Tab>('generate');
   const { state, loading, refresh } = useWorkerState();
 
   return (
@@ -20,8 +20,8 @@ export function App() {
       </header>
 
       <nav class="flex border-b border-white/5">
-        <TabButton active={tab === 'overview'} onClick={() => setTab('overview')} icon={<Activity size={14} />}>
-          Overview
+        <TabButton active={tab === 'generate'} onClick={() => setTab('generate')} icon={<Wand2 size={14} />}>
+          Generate
         </TabButton>
         <TabButton active={tab === 'accounts'} onClick={() => setTab('accounts')} icon={<Users size={14} />}>
           Accounts
@@ -31,16 +31,16 @@ export function App() {
             </span>
           )}
         </TabButton>
-        <TabButton active={tab === 'settings'} onClick={() => setTab('settings')} icon={<Settings size={14} />}>
+        <TabButton active={tab === 'settings'} onClick={() => setTab('settings')} icon={<SettingsIcon size={14} />}>
           Settings
         </TabButton>
       </nav>
 
-      <main class="flex-1 overflow-y-auto p-4">
+      <main class="flex-1 overflow-y-auto p-3">
         {loading || !state ? (
           <div class="flex h-full items-center justify-center text-xs text-zinc-500">Loading…</div>
-        ) : tab === 'overview' ? (
-          <OverviewTab state={state} refresh={refresh} />
+        ) : tab === 'generate' ? (
+          <GenerateTab state={state} refresh={refresh} />
         ) : tab === 'accounts' ? (
           <AccountsTab state={state} refresh={refresh} />
         ) : (
@@ -49,7 +49,7 @@ export function App() {
       </main>
 
       <footer class="border-t border-white/5 px-4 py-2 text-center text-[10px] text-zinc-500">
-        Bulk-GPT v4 · made by TurabCoder
+        Bulk-GPT v4 · TurabCoder
       </footer>
     </div>
   );
@@ -84,18 +84,14 @@ function TabButton({
 
 function StatusPill({ state }: { state: ReturnType<typeof useWorkerState>['state'] }) {
   if (!state) return <span class="badge badge-muted">…</span>;
-  if (!state.settings.workerEnabled)
-    return <span class="badge badge-muted">Off</span>;
-  if (state.status === 'processing')
-    return <span class="badge badge-warning">Working</span>;
-  if (state.status === 'paused')
-    return <span class="badge badge-warning">Paused</span>;
-  if (state.status === 'error')
-    return <span class="badge badge-danger">Error</span>;
-  return (
-    <span class="badge badge-success">
-      <span class="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-      Online
-    </span>
-  );
+  if (state.status === 'running')
+    return (
+      <span class="badge badge-warning">
+        <span class="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+        Generating
+      </span>
+    );
+  if (state.status === 'paused') return <span class="badge badge-warning">Paused</span>;
+  if (state.status === 'error') return <span class="badge badge-danger">Error</span>;
+  return <span class="badge badge-muted">Idle</span>;
 }

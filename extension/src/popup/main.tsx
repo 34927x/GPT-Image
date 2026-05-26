@@ -1,5 +1,5 @@
 import { render } from 'preact';
-import { ExternalLink, Settings as SettingsIcon, PanelRight } from 'lucide-preact';
+import { ExternalLink, PanelRight } from 'lucide-preact';
 import { Logo } from '@/ui/Logo';
 import { api } from '@/shared/api';
 import { useWorkerState } from '@/ui/hooks';
@@ -8,24 +8,12 @@ import '@/styles.css';
 function Popup() {
   const { state } = useWorkerState();
 
-  const enabled = state?.settings.workerEnabled ?? false;
   const status = state?.status ?? 'idle';
   const accountsCount = state?.accounts.length ?? 0;
-
-  const statusBadge =
-    status === 'processing'
-      ? 'badge-warning'
-      : status === 'polling' || status === 'idle'
-      ? enabled
-        ? 'badge-success'
-        : 'badge-muted'
-      : 'badge-danger';
-
-  const statusText = !enabled ? 'Off' : status === 'processing' ? 'Working' : status === 'polling' ? 'Online' : status;
+  const batch = state?.batch;
 
   function openSidebar() {
     if (api.sidePanel) {
-      // requires a user gesture in MV3
       api.windows.getCurrent().then((w) => {
         if (w.id) api.sidePanel.open({ windowId: w.id });
         window.close();
@@ -40,17 +28,29 @@ function Popup() {
     <div class="p-3 space-y-3">
       <div class="flex items-center justify-between">
         <Logo size="sm" />
-        <span class={`badge ${statusBadge}`}>{statusText}</span>
+        <span class={`badge ${status === 'running' ? 'badge-warning' : 'badge-muted'}`}>
+          {status === 'running' ? 'Generating' : status === 'paused' ? 'Paused' : 'Idle'}
+        </span>
       </div>
 
-      <div class="card space-y-1.5">
-        <div class="flex justify-between text-xs">
+      <div class="card space-y-1.5 text-xs">
+        <div class="flex justify-between">
           <span class="text-zinc-400">Accounts</span>
-          <span class="font-semibold">{accountsCount}</span>
+          <span class="font-semibold tabular-nums">{accountsCount}</span>
         </div>
-        <div class="flex justify-between text-xs">
-          <span class="text-zinc-400">Jobs today</span>
-          <span class="font-semibold">{state?.stats.jobsToday ?? 0}</span>
+        {batch && batch.items.length > 0 && (
+          <>
+            <div class="flex justify-between">
+              <span class="text-zinc-400">Done</span>
+              <span class="font-semibold tabular-nums text-emerald-300">
+                {batch.items.filter((i) => i.status === 'done').length}/{batch.items.length}
+              </span>
+            </div>
+          </>
+        )}
+        <div class="flex justify-between">
+          <span class="text-zinc-400">Today</span>
+          <span class="font-semibold tabular-nums">{state?.stats.jobsToday ?? 0}</span>
         </div>
       </div>
 
@@ -67,7 +67,7 @@ function Popup() {
         }}
       >
         <ExternalLink size={14} />
-        Open chatgpt.com
+        chatgpt.com
       </button>
 
       <p class="text-center text-[10px] text-zinc-500">Bulk-GPT v4 · TurabCoder</p>

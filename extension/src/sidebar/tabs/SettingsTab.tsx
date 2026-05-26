@@ -1,31 +1,28 @@
 import { useState, useEffect } from 'preact/hooks';
-import { Save, Loader2, CheckCircle2, AlertCircle } from 'lucide-preact';
+import { Save, Loader2, Check, AlertCircle, Folder } from 'lucide-preact';
 import { send } from '@/ui/hooks';
-import type { WorkerState } from '@/shared/messages';
+import type { State } from '@/shared/messages';
 
 export function SettingsTab({
   state,
   refresh,
 }: {
-  state: WorkerState;
+  state: State;
   refresh: () => Promise<void>;
 }) {
+  const [folder, setFolder] = useState(state.settings.downloadFolder);
+  const [cooldown, setCooldown] = useState(state.settings.cooldownAfterRunMs);
   const [serverUrl, setServerUrl] = useState(state.settings.serverUrl);
   const [token, setToken] = useState(state.settings.workerToken);
-  const [label, setLabel] = useState(state.settings.workerLabel);
-  const [pollInterval, setPollInterval] = useState(state.settings.pollIntervalMs);
-  const [cooldown, setCooldown] = useState(state.settings.cooldownAfterRunMs);
   const [saving, setSaving] = useState(false);
   const [pinging, setPinging] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
-  // Sync if state changes externally
   useEffect(() => {
+    setFolder(state.settings.downloadFolder);
+    setCooldown(state.settings.cooldownAfterRunMs);
     setServerUrl(state.settings.serverUrl);
     setToken(state.settings.workerToken);
-    setLabel(state.settings.workerLabel);
-    setPollInterval(state.settings.pollIntervalMs);
-    setCooldown(state.settings.cooldownAfterRunMs);
   }, [state.settings]);
 
   async function save() {
@@ -34,19 +31,16 @@ export function SettingsTab({
     const res = await send({
       type: 'setSettings',
       patch: {
+        downloadFolder: folder.trim() || 'Bulk-GPT',
+        cooldownAfterRunMs: Math.max(0, cooldown),
         serverUrl: serverUrl.trim(),
         workerToken: token.trim(),
-        workerLabel: label.trim(),
-        pollIntervalMs: Math.max(1000, pollInterval),
-        cooldownAfterRunMs: Math.max(0, cooldown),
       },
     });
     if (res.ok) {
       setMsg({ kind: 'ok', text: 'Saved' });
       refresh();
-    } else {
-      setMsg({ kind: 'err', text: res.error });
-    }
+    } else setMsg({ kind: 'err', text: res.error });
     setSaving(false);
   }
 
@@ -59,82 +53,81 @@ export function SettingsTab({
   }
 
   return (
-    <div class="space-y-4">
-      <div class="card space-y-3">
-        <p class="text-xs font-semibold uppercase tracking-wider text-zinc-400">
-          Server
+    <div class="space-y-3">
+      {/* Download folder */}
+      <div class="card space-y-2">
+        <p class="flex items-center gap-1.5 text-[11px] font-semibold text-zinc-300">
+          <Folder size={11} />
+          Download folder
         </p>
-        <div class="space-y-1.5">
-          <label class="text-[11px] text-zinc-400">Server URL</label>
+        <input
+          class="input"
+          placeholder="Bulk-GPT"
+          value={folder}
+          onInput={(e) => setFolder((e.target as HTMLInputElement).value)}
+        />
+        <p class="text-[10px] text-zinc-500">
+          Saved under <code class="rounded bg-white/5 px-1">Downloads/{folder || 'Bulk-GPT'}/</code>
+        </p>
+      </div>
+
+      {/* Cooldown */}
+      <div class="card space-y-2">
+        <p class="text-[11px] font-semibold text-zinc-300">Cooldown between runs</p>
+        <div class="flex items-center gap-2">
+          <input
+            type="number"
+            class="input flex-1"
+            min={0}
+            value={cooldown}
+            onInput={(e) =>
+              setCooldown(Number((e.target as HTMLInputElement).value) || 0)
+            }
+          />
+          <span class="text-[11px] text-zinc-500">ms</span>
+        </div>
+        <p class="text-[10px] text-zinc-500">
+          Pause between consecutive prompts. Lower = faster, higher = safer.
+        </p>
+      </div>
+
+      {/* Optional server */}
+      <details class="card group" open={!!state.settings.serverUrl}>
+        <summary class="cursor-pointer text-[11px] font-semibold text-zinc-300 list-none flex items-center justify-between">
+          <span>Server worker mode (optional)</span>
+          <span class="text-zinc-500 group-open:rotate-180 transition-transform">▾</span>
+        </summary>
+        <div class="mt-3 space-y-2">
+          <p class="text-[10px] text-zinc-500">
+            For when you sell access via the Bulk-GPT website. Leave empty if you only use the extension yourself.
+          </p>
           <input
             class="input"
-            placeholder="https://bulk-gpt.vercel.app"
+            placeholder="https://bulk-gpt-lemon.vercel.app"
             value={serverUrl}
             onInput={(e) => setServerUrl((e.target as HTMLInputElement).value)}
           />
-        </div>
-        <div class="space-y-1.5">
-          <label class="text-[11px] text-zinc-400">Worker token</label>
           <input
             type="password"
             class="input font-mono"
-            placeholder="From Vercel env: WORKER_TOKEN"
+            placeholder="Worker token"
             value={token}
             onInput={(e) => setToken((e.target as HTMLInputElement).value)}
           />
+          <button
+            class="btn btn-outline w-full"
+            onClick={ping}
+            disabled={pinging}
+          >
+            {pinging ? <Loader2 size={12} class="animate-spin" /> : 'Test connection'}
+          </button>
         </div>
-        <div class="space-y-1.5">
-          <label class="text-[11px] text-zinc-400">Worker label (optional)</label>
-          <input
-            class="input"
-            placeholder="My Laptop"
-            value={label}
-            onInput={(e) => setLabel((e.target as HTMLInputElement).value)}
-          />
-        </div>
-      </div>
+      </details>
 
-      <div class="card space-y-3">
-        <p class="text-xs font-semibold uppercase tracking-wider text-zinc-400">
-          Timing
-        </p>
-        <div class="grid grid-cols-2 gap-2">
-          <div class="space-y-1.5">
-            <label class="text-[11px] text-zinc-400">Poll interval (ms)</label>
-            <input
-              type="number"
-              class="input"
-              min={1000}
-              value={pollInterval}
-              onInput={(e) =>
-                setPollInterval(Number((e.target as HTMLInputElement).value) || 5000)
-              }
-            />
-          </div>
-          <div class="space-y-1.5">
-            <label class="text-[11px] text-zinc-400">Cooldown (ms)</label>
-            <input
-              type="number"
-              class="input"
-              min={0}
-              value={cooldown}
-              onInput={(e) =>
-                setCooldown(Number((e.target as HTMLInputElement).value) || 0)
-              }
-            />
-          </div>
-        </div>
-      </div>
-
-      <div class="flex gap-2">
-        <button class="btn btn-gradient flex-1" onClick={save} disabled={saving}>
-          {saving ? <Loader2 size={14} class="animate-spin" /> : <Save size={14} />}
-          Save
-        </button>
-        <button class="btn btn-outline" onClick={ping} disabled={pinging}>
-          {pinging ? <Loader2 size={14} class="animate-spin" /> : 'Test'}
-        </button>
-      </div>
+      <button class="btn btn-gradient w-full" onClick={save} disabled={saving}>
+        {saving ? <Loader2 size={12} class="animate-spin" /> : <Save size={12} />}
+        Save settings
+      </button>
 
       {msg && (
         <div
@@ -145,20 +138,25 @@ export function SettingsTab({
               : 'border-rose-500/30 bg-rose-500/5 text-rose-300')
           }
         >
-          {msg.kind === 'ok' ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+          {msg.kind === 'ok' ? <Check size={12} /> : <AlertCircle size={12} />}
           {msg.text}
         </div>
       )}
 
-      <div class="card text-[11px] text-zinc-400 space-y-1">
-        <p>
-          <span class="font-semibold text-zinc-300">Worker ID:</span>{' '}
-          <span class="font-mono">{state.workerId}</span>
-        </p>
-        <p>
-          Settings sync to <code class="rounded bg-white/5 px-1">storage.local</code>.
-          Keep your token private — anyone with it can submit fake images to your queue.
-        </p>
+      <div class="card text-[10px] text-zinc-400 space-y-1">
+        <p class="font-semibold text-zinc-300">Stats</p>
+        <div class="flex justify-between">
+          <span>Today</span>
+          <span class="font-mono text-zinc-200">{state.stats.jobsToday}</span>
+        </div>
+        <div class="flex justify-between">
+          <span>Total</span>
+          <span class="font-mono text-zinc-200">{state.stats.jobsTotal}</span>
+        </div>
+        <div class="flex justify-between">
+          <span>Failed today</span>
+          <span class="font-mono text-rose-300">{state.stats.failsToday}</span>
+        </div>
       </div>
     </div>
   );

@@ -2,36 +2,40 @@ import { api } from '@/shared/api';
 import { storage } from '@/shared/storage';
 import { captureCurrentCookies, hasSessionCookie } from '@/shared/cookies';
 import type { UIMessage, BackgroundResponse } from '@/shared/messages';
-import { startLoop, stopLoop, isRunning } from './loop';
+import {
+  startBatch,
+  pauseBatch,
+  resumeBatch,
+  stopBatch,
+  clearBatch,
+  isRunning,
+} from './batch-engine';
 import { refreshState } from './state';
 
 api.runtime.onInstalled.addListener(async () => {
   if (api.sidePanel) {
-    api.sidePanel
-      .setPanelBehavior({ openPanelOnActionClick: true })
-      .catch(() => {});
+    api.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
   }
   await refreshState();
-
-  const settings = await storage.getSettings();
-  if (settings.workerEnabled && settings.serverUrl && settings.workerToken) {
-    startLoop();
-  }
 });
 
 api.runtime.onStartup?.addListener?.(async () => {
-  const settings = await storage.getSettings();
-  if (settings.workerEnabled && settings.serverUrl && settings.workerToken) {
-    startLoop();
+  // If a batch was running before browser restart, leave it paused.
+  const batch = await storage.getBatch();
+  if (batch && batch.status === 'running') {
+    batch.status = 'paused';
+    batch.message = 'Paused (browser was restarted)';
+    await storage.setBatch(batch);
   }
+  await refreshState();
 });
 
-// MV3 service worker keep-alive
-api.alarms.create('keepAlive', { periodInMinutes: 0.5 });
+// Keeps the service worker alive while a batch runs
+api.alarms.create('keepAlive', { periodInMinutes: 0.4 });
 api.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'keepAlive') {
-    storage.getSettings().then((s) => {
-      if (s.workerEnabled && !isRunning()) startLoop();
+  if (alarm.name === 'keepAlive' && !isRunning()) {
+    storage.getBatch().then((b) => {
+      if (b?.status === 'running') resumeBatch();
     });
   }
 });
@@ -58,19 +62,7 @@ async function handle(msg: UIMessage) {
       return await refreshState();
 
     case 'setSettings': {
-      const next = await storage.setSettings(msg.patch);
-      const wasRunning = isRunning();
-      if (wasRunning) await stopLoop();
-      if (next.workerEnabled && next.serverUrl && next.workerToken) {
-        startLoop();
-      }
-      return await refreshState();
-    }
-
-    case 'setWorkerEnabled': {
-      const next = await storage.setSettings({ workerEnabled: msg.enabled });
-      if (msg.enabled && next.serverUrl && next.workerToken) startLoop();
-      else stopLoop();
+      await storage.setSettings(msg.patch);
       return await refreshState();
     }
 
@@ -96,8 +88,6 @@ async function handle(msg: UIMessage) {
     }
 
     case 'refreshAccountCookies': {
-      // User logged into chatgpt.com again and wants to refresh saved cookies
-      // for an existing account.
       const cookies = await captureCurrentCookies();
       if (!cookies.length || !hasSessionCookie(cookies)) {
         throw new Error('No fresh session detected. Log in to chatgpt.com first.');
@@ -120,6 +110,30 @@ async function handle(msg: UIMessage) {
       return await refreshState();
     }
 
+    case 'startBatch': {
+      if (!msg.prompts.length) throw new Error('Add at least one prompt');
+      const accounts = await storage.getAccounts();
+      if (!accounts.length) throw new Error('Add at least one account first');
+      await startBatch(msg.prompts, msg.size);
+      return await refreshState();
+    }
+
+    case 'pauseBatch':
+      await pauseBatch();
+      return await refreshState();
+
+    case 'resumeBatch':
+      await resumeBatch();
+      return await refreshState();
+
+    case 'stopBatch':
+      await stopBatch();
+      return await refreshState();
+
+    case 'clearBatch':
+      await clearBatch();
+      return await refreshState();
+
     case 'pingServer': {
       const settings = await storage.getSettings();
       if (!settings.serverUrl || !settings.workerToken) {
@@ -134,7 +148,7 @@ async function handle(msg: UIMessage) {
           'X-Worker-Id': await storage.getWorkerId(),
         },
         body: JSON.stringify({
-          label: settings.workerLabel || 'Test',
+          label: 'Test',
           version: '4.0.0',
           accountsTotal: 0,
           accountsActive: 0,
@@ -146,6 +160,11 @@ async function handle(msg: UIMessage) {
         throw new Error(`Server replied ${res.status}: ${text.slice(0, 100)}`);
       }
       return { ok: true };
+    }
+
+    case 'setWorkerEnabled': {
+      await storage.setSettings({ workerEnabled: msg.enabled });
+      return await refreshState();
     }
   }
 }

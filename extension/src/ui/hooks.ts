@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'preact/hooks';
 import { api } from '@/shared/api';
-import type { UIMessage, BackgroundResponse, WorkerState } from '@/shared/messages';
+import type { UIMessage, BackgroundResponse, State } from '@/shared/messages';
 
 export async function send(msg: UIMessage): Promise<BackgroundResponse> {
   return new Promise((resolve) => {
@@ -15,19 +15,19 @@ export async function send(msg: UIMessage): Promise<BackgroundResponse> {
 }
 
 export function useWorkerState(): {
-  state: WorkerState | null;
+  state: State | null;
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
 } {
-  const [state, setState] = useState<WorkerState | null>(null);
+  const [state, setState] = useState<State | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     const res = await send({ type: 'getState' });
     if (res.ok) {
-      setState(res.data as WorkerState);
+      setState(res.data as State);
       setError(null);
     } else setError(res.error);
     setLoading(false);
@@ -35,7 +35,7 @@ export function useWorkerState(): {
 
   useEffect(() => {
     refresh();
-    const handler = (msg: { type?: string; state?: WorkerState }) => {
+    const handler = (msg: { type?: string; state?: State }) => {
       if (msg?.type === 'stateUpdate' && msg.state) setState(msg.state);
     };
     api.runtime.onMessage.addListener(handler);

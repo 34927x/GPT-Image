@@ -1,53 +1,41 @@
 import { api } from '@/shared/api';
 import { storage } from '@/shared/storage';
-import { activeAccountsCount } from './account-manager';
-import type { WorkerState } from '@/shared/messages';
+import type { State } from '@/shared/messages';
 
-let snapshot: WorkerState = {
+let snapshot: State = {
   settings: {
+    downloadFolder: 'Bulk-GPT',
+    defaultSize: '1:1',
+    cooldownAfterRunMs: 2500,
     serverUrl: '',
     workerToken: '',
-    workerLabel: '',
     workerEnabled: false,
-    pollIntervalMs: 4000,
-    cooldownAfterRunMs: 2500,
   },
   accounts: [],
   stats: { jobsToday: 0, jobsTotal: 0, jobsTodayDate: '', failsToday: 0 },
   workerId: '',
   status: 'idle',
+  batch: null,
 };
 
-export async function refreshState(patch?: Partial<WorkerState>): Promise<WorkerState> {
-  const [settings, accounts, stats, workerId] = await Promise.all([
+export async function refreshState(patch?: Partial<State>): Promise<State> {
+  const [settings, accounts, stats, workerId, batch] = await Promise.all([
     storage.getSettings(),
     storage.getAccounts(),
     storage.getStats(),
     storage.getWorkerId(),
+    storage.getBatch(),
   ]);
-  snapshot = { ...snapshot, settings, accounts, stats, workerId, ...(patch ?? {}) };
+  snapshot = { ...snapshot, settings, accounts, stats, workerId, batch, ...(patch ?? {}) };
   api.runtime.sendMessage({ type: 'stateUpdate', state: snapshot }).catch(() => {});
   return snapshot;
 }
 
-export function getSnapshot(): WorkerState {
+export function getSnapshot(): State {
   return snapshot;
 }
 
-export function patchStatus(patch: Partial<WorkerState>) {
+export function patchStatus(patch: Partial<State>) {
   snapshot = { ...snapshot, ...patch };
   api.runtime.sendMessage({ type: 'stateUpdate', state: snapshot }).catch(() => {});
-}
-
-export async function buildHeartbeatSnapshot() {
-  const settings = await storage.getSettings();
-  const accounts = await storage.getAccounts();
-  const stats = await storage.getStats();
-  return {
-    label: settings.workerLabel || 'Unnamed worker',
-    version: '4.0.0',
-    accountsTotal: accounts.length,
-    accountsActive: await activeAccountsCount(),
-    jobsToday: stats.jobsToday,
-  };
 }

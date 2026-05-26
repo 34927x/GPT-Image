@@ -1,14 +1,14 @@
 import { useState } from 'preact/hooks';
 import { Plus, Trash2, RefreshCw, Check, Loader2, ExternalLink } from 'lucide-preact';
 import { send } from '@/ui/hooks';
-import type { WorkerState } from '@/shared/messages';
+import type { State } from '@/shared/messages';
 import { api } from '@/shared/api';
 
 export function AccountsTab({
   state,
   refresh,
 }: {
-  state: WorkerState;
+  state: State;
   refresh: () => Promise<void>;
 }) {
   const [showAdd, setShowAdd] = useState(false);
